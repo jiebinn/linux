@@ -2360,7 +2360,7 @@ arch_atomic64_add_negative(s64 i, atomic64_t *v)
 static __always_inline s64
 arch_atomic64_fetch_add_unless(atomic64_t *v, s64 a, s64 u)
 {
-	s64 c = arch_atomic64_read(v);
+	s64 c = -1;
 
 	do {
 		if (unlikely(c == u))
