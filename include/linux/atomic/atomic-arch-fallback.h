@@ -2361,11 +2361,20 @@ static __always_inline s64
 arch_atomic64_fetch_add_unless(atomic64_t *v, s64 a, s64 u)
 {
 	s64 c = arch_atomic64_read(v);
+	s64 x = 0;
 
-	do {
+	for (;;) {
 		if (unlikely(c == u))
 			break;
-	} while (!arch_atomic64_try_cmpxchg(v, &c, c + a));
+
+		x = arch_atomic64_read(v);
+		if (c != x){
+			c = x;
+			continue;
+		}
+		if (arch_atomic64_try_cmpxchg(v, &c, c + a))
+			break;
+	}
 
 	return c;
 }
