@@ -314,6 +314,42 @@ static void compute_stats(struct c2c_hist_entry *c2c_he,
 		update_stats(&cstats->load, weight);
 }
 
+/* Helper function to merge two stats structures using Welford's algorithm */
+static void merge_stats(struct stats *dest, struct stats *src)
+{
+	double delta;
+	
+	if (src->n == 0)
+		return;
+		
+	if (dest->n == 0) {
+		*dest = *src;
+		return;
+	}
+	
+	/* Welford's algorithm for merging online statistics */
+	delta = src->mean - dest->mean;
+	dest->M2 += src->M2 + delta * delta * dest->n * src->n / (dest->n + src->n);
+	dest->mean = (dest->mean * dest->n + src->mean * src->n) / (dest->n + src->n);
+	dest->n += src->n;
+	
+	/* Update min/max */
+	if (src->max > dest->max)
+		dest->max = src->max;
+	if (src->min < dest->min || dest->min == 0)
+		dest->min = src->min;
+}
+
+/* Function to merge compute_stats during symbol aggregation */
+static void c2c_add_cstats(struct compute_stats *dest, struct compute_stats *src)
+{
+	merge_stats(&dest->rmt_hitm, &src->rmt_hitm);
+	merge_stats(&dest->lcl_hitm, &src->lcl_hitm);
+	merge_stats(&dest->rmt_peer, &src->rmt_peer);
+	merge_stats(&dest->lcl_peer, &src->lcl_peer);
+	merge_stats(&dest->load, &src->load);
+}
+
 static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 				union perf_event *event,
 				struct perf_sample *sample,
@@ -1853,11 +1889,249 @@ static struct c2c_dimension dim_mean_lcl_peer = {
 	.width		= 8,
 };
 
+/* Entry functions for cycles calculations */
+static int
+cycles_rmt_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		      struct hist_entry *he)
+{
+	struct c2c_hist_entry *c2c_he;
+	int width = c2c_width(fmt, hpp, he->hists);
+	uint64_t cycles;
+
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	cycles = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
+
+	return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
+}
+
+static int
+cycles_lcl_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		      struct hist_entry *he)
+{
+	struct c2c_hist_entry *c2c_he;
+	int width = c2c_width(fmt, hpp, he->hists);
+	uint64_t cycles;
+
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	cycles = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
+
+	return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
+}
+
+static int
+cycles_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		  struct hist_entry *he)
+{
+	struct c2c_hist_entry *c2c_he;
+	int width = c2c_width(fmt, hpp, he->hists);
+	uint64_t cycles, other_load;
+
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
+	cycles = avg_stats(&c2c_he->cstats.load) * other_load;
+
+	return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
+}
+
+static int
+cycles_total_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		   struct hist_entry *he)
+{
+	struct c2c_hist_entry *c2c_he;
+	int width = c2c_width(fmt, hpp, he->hists);
+	uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load;
+
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
+	cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
+	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
+	cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
+
+	return scnprintf(hpp->buf, hpp->size, "%*llu", width,
+			 cycles_rmt + cycles_lcl + cycles_load);
+}
+
+static int
+cnt_other_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		     struct hist_entry *he)
+{
+	struct c2c_hist_entry *c2c_he;
+	int width = c2c_width(fmt, hpp, he->hists);
+	uint64_t other_load;
+
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
+
+	return scnprintf(hpp->buf, hpp->size, "%*llu", width, other_load);
+}
+
+/* Function to calculate total cycles for all symbols for percentage calculation */
+static uint64_t get_total_cycles_all_symbols(void)
+{
+	struct rb_node *nd;
+	uint64_t total_cycles = 0;
+
+	nd = rb_first_cached(&c2c.symbol_hists.hists.entries);
+	while (nd) {
+		struct hist_entry *he = rb_entry(nd, struct hist_entry, rb_node);
+		struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
+		uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load;
+
+		cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
+		cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
+		other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
+		cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
+
+		total_cycles += cycles_rmt + cycles_lcl + cycles_load;
+		nd = rb_next(nd);
+	}
+	return total_cycles;
+}
+
+static int
+cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		     struct hist_entry *he)
+{
+	struct c2c_hist_entry *c2c_he;
+	int width = c2c_width(fmt, hpp, he->hists);
+	uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load, symbol_cycles;
+	uint64_t total_cycles;
+	double percent;
+
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
+	cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
+	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
+	cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
+	symbol_cycles = cycles_rmt + cycles_lcl + cycles_load;
+
+	total_cycles = get_total_cycles_all_symbols();
+	if (total_cycles > 0)
+		percent = (double)symbol_cycles / total_cycles * 100.0;
+	else
+		percent = 0.0;
+
+	return scnprintf(hpp->buf, hpp->size, "%*.2f%%", width-1, percent);
+}
+
+/* Comparison function for cycles percentage sorting */
+static int64_t
+cycles_percent_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
+		   struct hist_entry *left, struct hist_entry *right)
+{
+	struct c2c_hist_entry *c2c_left = container_of(left, struct c2c_hist_entry, he);
+	struct c2c_hist_entry *c2c_right = container_of(right, struct c2c_hist_entry, he);
+	uint64_t cycles_left, cycles_right, other_load_left, other_load_right;
+
+	/* Calculate cycles for left */
+	other_load_left = c2c_left->stats.load - c2c_left->stats.rmt_hitm - c2c_left->stats.lcl_hitm;
+	cycles_left = avg_stats(&c2c_left->cstats.rmt_hitm) * c2c_left->stats.rmt_hitm +
+		      avg_stats(&c2c_left->cstats.lcl_hitm) * c2c_left->stats.lcl_hitm +
+		      avg_stats(&c2c_left->cstats.load) * other_load_left;
+
+	/* Calculate cycles for right */
+	other_load_right = c2c_right->stats.load - c2c_right->stats.rmt_hitm - c2c_right->stats.lcl_hitm;
+	cycles_right = avg_stats(&c2c_right->cstats.rmt_hitm) * c2c_right->stats.rmt_hitm +
+		       avg_stats(&c2c_right->cstats.lcl_hitm) * c2c_right->stats.lcl_hitm +
+		       avg_stats(&c2c_right->cstats.load) * other_load_right;
+
+	return cycles_left - cycles_right;
+}
+
 static struct c2c_dimension dim_cpucnt = {
 	.header		= HEADER_BOTH("cpu", "cnt"),
 	.name		= "cpucnt",
 	.cmp		= empty_cmp,
 	.entry		= cpucnt_entry,
+	.width		= 8,
+};
+
+/* New dimensions for latency and cycles calculations with English naming */
+static struct c2c_dimension dim_latency_rmt_hitm = {
+	.header		= HEADER_SPAN("------ Latency (cycles) ------", "Rmt HITM", 2),
+	.name		= "latency_rmt_hitm",
+	.cmp		= empty_cmp,
+	.entry		= mean_rmt_entry,
+	.width		= 9,
+};
+
+static struct c2c_dimension dim_latency_lcl_hitm = {
+	.header		= HEADER_SPAN_LOW("Lcl HITM"),
+	.name		= "latency_lcl_hitm",
+	.cmp		= empty_cmp,
+	.entry		= mean_lcl_entry,
+	.width		= 9,
+};
+
+static struct c2c_dimension dim_latency_load = {
+	.header		= HEADER_SPAN_LOW("Load"),
+	.name		= "latency_load",
+	.cmp		= empty_cmp,
+	.entry		= mean_load_entry,
+	.width		= 9,
+};
+
+static struct c2c_dimension dim_cnt_rmt_hitm = {
+	.header		= HEADER_SPAN("-------- Count --------", "Rmt HITM", 2),
+	.name		= "cnt_rmt_hitm",
+	.cmp		= empty_cmp,
+	.entry		= rmt_hitm_entry,
+	.width		= 9,
+};
+
+static struct c2c_dimension dim_cnt_lcl_hitm = {
+	.header		= HEADER_SPAN_LOW("Lcl HITM"),
+	.name		= "cnt_lcl_hitm",
+	.cmp		= empty_cmp,
+	.entry		= lcl_hitm_entry,
+	.width		= 9,
+};
+
+static struct c2c_dimension dim_cnt_other_load = {
+	.header		= HEADER_SPAN_LOW("Load"),
+	.name		= "cnt_other_load",
+	.cmp		= empty_cmp,
+	.entry		= cnt_other_load_entry,
+	.width		= 9,
+};
+
+static struct c2c_dimension dim_cycles_rmt_hitm = {
+	.header		= HEADER_SPAN("------- Total Cycles -------", "Rmt HITM", 2),
+	.name		= "cycles_rmt_hitm",
+	.cmp		= empty_cmp,
+	.entry		= cycles_rmt_hitm_entry,
+	.width		= 10,
+};
+
+static struct c2c_dimension dim_cycles_lcl_hitm = {
+	.header		= HEADER_SPAN_LOW("Lcl HITM"),
+	.name		= "cycles_lcl_hitm",
+	.cmp		= empty_cmp,
+	.entry		= cycles_lcl_hitm_entry,
+	.width		= 10,
+};
+
+static struct c2c_dimension dim_cycles_load = {
+	.header		= HEADER_SPAN_LOW("Load"),
+	.name		= "cycles_load",
+	.cmp		= empty_cmp,
+	.entry		= cycles_load_entry,
+	.width		= 10,
+};
+
+static struct c2c_dimension dim_cycles_total = {
+	.header		= HEADER_SPAN_LOW("Total"),
+	.name		= "cycles_total",
+	.cmp		= empty_cmp,
+	.entry		= cycles_total_entry,
+	.width		= 11,
+};
+
+static struct c2c_dimension dim_cycles_percent = {
+	.header		= HEADER_BOTH("Cycles", "Percent"),
+	.name		= "cycles_percent",
+	.cmp		= cycles_percent_cmp,
+	.entry		= cycles_percent_entry,
 	.width		= 8,
 };
 
@@ -1942,6 +2216,17 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_mean_lcl_peer,
 	&dim_mean_load,
 	&dim_cpucnt,
+	&dim_latency_rmt_hitm,
+	&dim_latency_lcl_hitm,
+	&dim_latency_load,
+	&dim_cnt_rmt_hitm,
+	&dim_cnt_lcl_hitm,
+	&dim_cnt_other_load,
+	&dim_cycles_rmt_hitm,
+	&dim_cycles_lcl_hitm,
+	&dim_cycles_load,
+	&dim_cycles_total,
+	&dim_cycles_percent,
 	&dim_srcline,
 	&dim_dcacheline_idx,
 	&dim_dcacheline_num,
@@ -3130,10 +3415,10 @@ static int build_symbol_hists(void)
 	if (ret)
 		return ret;
 
-	/* Setup output fields for symbol view - use only symbol for sorting */
+	/* Setup output fields for symbol view - sorted by cycles percentage (descending) */
 	ret = c2c_hists__reinit(&c2c.symbol_hists,
-		"symbol,tot_hitm,lcl_hitm,rmt_hitm,tot_recs,tot_loads,stores",
-		"symbol");
+		"symbol,latency_rmt_hitm,latency_lcl_hitm,latency_load,tot_recs,cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,cycles_rmt_hitm,cycles_lcl_hitm,cycles_load,cycles_total,cycles_percent",
+		"cycles_percent");
 	if (ret)
 		return ret;
 
@@ -3188,6 +3473,9 @@ static int build_symbol_hists(void)
 				/* Add stats to the symbol entry */
 				c2c_add_stats(&c2c_he_sym->stats, &c2c_he->stats);
 				c2c_add_stats(&c2c.symbol_hists.stats, &c2c_he->stats);
+				
+				/* Also merge the compute stats (latency info) */
+				c2c_add_cstats(&c2c_he_sym->cstats, &c2c_he->cstats);
 
 				hists__inc_nr_samples(&c2c.symbol_hists.hists, he_sym->filtered);
 				
@@ -3246,8 +3534,11 @@ static int build_symbol_hists(void)
 						c2c_he_sym = container_of(he_sym, struct c2c_hist_entry, he);
 
 						/* Add stats to the symbol entry */
-						c2c_add_stats(&c2c_he_sym->stats, &c2c_he_cl->stats);
-						c2c_add_stats(&c2c.symbol_hists.stats, &c2c_he_cl->stats);
+										c2c_add_stats(&c2c_he_sym->stats, &c2c_he_cl->stats);
+				c2c_add_stats(&c2c.symbol_hists.stats, &c2c_he_cl->stats);
+				
+				/* Also merge the compute stats (latency info) */
+				c2c_add_cstats(&c2c_he_sym->cstats, &c2c_he_cl->cstats);
 
 						hists__inc_nr_samples(&c2c.symbol_hists.hists, he_sym->filtered);
 						
