@@ -154,9 +154,6 @@ static struct perf_c2c c2c;
 
 /* Forward declaration */
 static int build_symbol_hists(void);
-static void init_symbol_tracking(void);
-static void track_symbol_cacheline(struct symbol *sym, uint64_t cacheline_addr, 
-				   struct c2c_stats *stats);
 
 static void *c2c_he_zalloc(size_t size)
 {
@@ -397,20 +394,7 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 
 	c2c_decode_stats(&stats, mi);
 
-	/* Track symbol-cacheline associations before aggregation */
-	init_symbol_tracking();
-	if (mi && al.sym) {
-		uint64_t cacheline_addr = cl_address(mi->daddr.addr, chk_double_cl);
-		/* Only track if we have HITM events */
-		if (stats.rmt_hitm > 0 || stats.lcl_hitm > 0) {
-			track_symbol_cacheline(al.sym, cacheline_addr, &stats);
-			if (verbose > 2)
-				printf("Sample: %s accessing cacheline 0x%lx (data sym: %s)\n",
-				       al.sym->name, 
-				       cacheline_addr,
-				       mi->daddr.ms.sym ? mi->daddr.ms.sym->name : "[no symbol]");
-		}
-	}
+
 
 	he = hists__add_entry_ops(&c2c_hists->hists, &c2c_entry_ops,
 				  &al, NULL, NULL, mi, NULL,
@@ -3096,97 +3080,7 @@ static void populate_symbol_children(struct hist_entry *he)
  * each shared cacheline between two symbols.
  */
 
-/* Temporary structures for tracking cacheline-symbol relationships */
-struct cacheline_symbols {
-	uint64_t cl_addr;                /* Cacheline address */
-	struct list_head symbols;       /* List of symbols accessing this cacheline */
-	struct list_head list;
-};
 
-struct cacheline_symbol_entry {
-	struct symbol *sym;             /* Symbol that accesses the cacheline */
-	struct c2c_stats stats;         /* Aggregated statistics for this symbol */
-	struct list_head list;
-};
-
-/* Global symbol-cacheline association tracking */
-struct symbol_cacheline_map {
-	struct symbol *sym;
-	uint64_t cacheline_addr;
-	struct c2c_stats stats;
-	struct list_head list;
-};
-
-#define SYMBOL_CACHELINE_HASH_SIZE 2048
-static struct list_head symbol_cacheline_hash[SYMBOL_CACHELINE_HASH_SIZE];
-static bool symbol_tracking_initialized = false;
-
-static unsigned int symbol_cacheline_hash_fn(struct symbol *sym, uint64_t addr)
-{
-	unsigned long hash = (unsigned long)sym;
-	/* Improve hash distribution by mixing more bits */
-	hash ^= (addr >> 6);
-	hash ^= (addr >> 12) << 8;
-	hash ^= (addr >> 18) << 16;
-	/* Mix symbol pointer bits for better distribution */
-	hash ^= ((unsigned long)sym >> 3) << 24;
-	return hash % SYMBOL_CACHELINE_HASH_SIZE;
-}
-
-static void init_symbol_tracking(void)
-{
-	int i;
-	
-	if (symbol_tracking_initialized)
-		return;
-		
-	for (i = 0; i < SYMBOL_CACHELINE_HASH_SIZE; i++) {
-		INIT_LIST_HEAD(&symbol_cacheline_hash[i]);
-	}
-	symbol_tracking_initialized = true;
-}
-
-static void track_symbol_cacheline(struct symbol *sym, uint64_t cacheline_addr, 
-				   struct c2c_stats *stats)
-{
-	unsigned int hash_idx;
-	struct symbol_cacheline_map *map;
-	bool found = false;
-
-	if (!sym)
-		return;
-
-	if (verbose > 2)
-		printf("track_symbol_cacheline: %s -> 0x%lx (HITM: %u)\n", 
-		       sym->name, cacheline_addr, 
-		       stats->rmt_hitm + stats->lcl_hitm);
-
-	hash_idx = symbol_cacheline_hash_fn(sym, cacheline_addr);
-
-	/* Look for existing entry */
-	list_for_each_entry(map, &symbol_cacheline_hash[hash_idx], list) {
-		if (map->sym == sym && map->cacheline_addr == cacheline_addr) {
-			/* Aggregate stats */
-			map->stats.rmt_hitm += stats->rmt_hitm;
-			map->stats.lcl_hitm += stats->lcl_hitm;
-			map->stats.load += stats->load;
-			map->stats.store += stats->store;
-			found = true;
-			break;
-		}
-	}
-
-	if (!found) {
-		/* Create new entry */
-		map = zalloc(sizeof(*map));
-		if (map) {
-			map->sym = sym;
-			map->cacheline_addr = cacheline_addr;
-			memcpy(&map->stats, stats, sizeof(map->stats));
-			list_add_tail(&map->list, &symbol_cacheline_hash[hash_idx]);
-		}
-	}
-}
 
 static void build_symbol_associations(void)
 {
@@ -3534,11 +3428,11 @@ static int build_symbol_hists(void)
 						c2c_he_sym = container_of(he_sym, struct c2c_hist_entry, he);
 
 						/* Add stats to the symbol entry */
-										c2c_add_stats(&c2c_he_sym->stats, &c2c_he_cl->stats);
-				c2c_add_stats(&c2c.symbol_hists.stats, &c2c_he_cl->stats);
-				
-				/* Also merge the compute stats (latency info) */
-				c2c_add_cstats(&c2c_he_sym->cstats, &c2c_he_cl->cstats);
+						c2c_add_stats(&c2c_he_sym->stats, &c2c_he_cl->stats);
+						c2c_add_stats(&c2c.symbol_hists.stats, &c2c_he_cl->stats);
+
+						/* Also merge the compute stats (latency info) */
+						c2c_add_cstats(&c2c_he_sym->cstats, &c2c_he_cl->cstats);
 
 						hists__inc_nr_samples(&c2c.symbol_hists.hists, he_sym->filtered);
 						
