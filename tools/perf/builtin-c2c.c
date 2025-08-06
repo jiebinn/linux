@@ -155,6 +155,12 @@ static struct perf_c2c c2c;
 /* Forward declaration */
 static int build_symbol_hists(void);
 
+/* Helper function to initialize c2c_hist_entry related_symbols */
+static void init_c2c_he_related_symbols(struct c2c_hist_entry *c2c_he)
+{
+	INIT_LIST_HEAD(&c2c_he->related_symbols);
+}
+
 static void *c2c_he_zalloc(size_t size)
 {
 	struct c2c_hist_entry *c2c_he;
@@ -182,7 +188,7 @@ static void *c2c_he_zalloc(size_t size)
 	init_stats(&c2c_he->cstats.load);
 
 	/* Initialize symbol association fields */
-	INIT_LIST_HEAD(&c2c_he->related_symbols);
+	init_c2c_he_related_symbols(c2c_he);
 
 	return &c2c_he->he;
 
@@ -193,6 +199,45 @@ out_free:
 	return NULL;
 }
 
+/* Debug output macros to optimize verbose printing */
+#define c2c_debug(level, fmt, ...) \
+	do { if (verbose >= level) printf(fmt, ##__VA_ARGS__); } while (0)
+
+#define c2c_debug1(fmt, ...) c2c_debug(1, fmt, ##__VA_ARGS__)
+#define c2c_debug2(fmt, ...) c2c_debug(2, fmt, ##__VA_ARGS__)
+#define c2c_debug3(fmt, ...) c2c_debug(3, fmt, ##__VA_ARGS__)
+
+/* Helper function to free child entries properly */
+static void free_child_entries(struct hist_entry *parent_he)
+{
+	struct rb_node *nd;
+	struct hist_entry *child_he;
+	struct c2c_hist_entry *child_c2c_he;
+
+	if (RB_EMPTY_ROOT(&parent_he->hroot_out.rb_root))
+		return;
+
+	nd = rb_first_cached(&parent_he->hroot_out);
+	while (nd) {
+		struct rb_node *next = rb_next(nd);
+		
+		child_he = rb_entry(nd, struct hist_entry, rb_node);
+		child_c2c_he = container_of(child_he, struct c2c_hist_entry, he);
+		
+		/* Free stat_acc if allocated */
+		if (child_he->stat_acc) {
+			free(child_he->stat_acc);
+			child_he->stat_acc = NULL;
+		}
+		
+		/* Remove from tree and free */
+		rb_erase_cached(&child_he->rb_node, &parent_he->hroot_out);
+		free(child_c2c_he);
+		
+		nd = next;
+	}
+}
+
 static void c2c_he_free(void *he)
 {
 	struct c2c_hist_entry *c2c_he;
@@ -200,6 +245,10 @@ static void c2c_he_free(void *he)
 	struct hist_entry *hist_entry = (struct hist_entry *)he;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	
+	/* Free child entries first */
+	free_child_entries(hist_entry);
+	
 	if (c2c_he->hists) {
 		hists__delete_entries(&c2c_he->hists->hists);
 		zfree(&c2c_he->hists);
@@ -2947,30 +2996,26 @@ static void populate_symbol_children(struct hist_entry *he)
 	
 	/* If already populated, return */
 	if (!RB_EMPTY_ROOT(&root->rb_root)) {
-		if (verbose)
-			printf("populate_symbol_children: already populated\n");
+			c2c_debug1("populate_symbol_children: already populated\n");
 		return;
 	}
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	if (!c2c_he) {
-		if (verbose)
-			printf("populate_symbol_children: NULL c2c_hist_entry\n");
+			c2c_debug1("populate_symbol_children: NULL c2c_hist_entry\n");
 		return;
 	}
 
 	/* Ensure related_symbols list is valid */
 	if (list_empty(&c2c_he->related_symbols)) {
-		if (verbose)
-			printf("Warning: Symbol %s marked as expandable but has no related symbols\n",
-			       he->ms.sym ? he->ms.sym->name : "[unknown]");
+			c2c_debug1("Warning: Symbol %s marked as expandable but has no related symbols\n",
+		   he->ms.sym ? he->ms.sym->name : "[unknown]");
 		he->has_children = false;  /* Reset inconsistent state */
 		return;
 	}
 
-	if (verbose > 1)
-		printf("Creating children for symbol: %s (he=%p, hists=%p)\n",
-		       he->ms.sym ? he->ms.sym->name : "[unknown]", he, he->hists);
+	c2c_debug2("Creating children for symbol: %s (he=%p, hists=%p)\n",
+		   he->ms.sym ? he->ms.sym->name : "[unknown]", he, he->hists);
 
 	/* Create child entries for each related symbol */
 	list_for_each_entry(rel_sym, &c2c_he->related_symbols, list) {
@@ -2978,21 +3023,19 @@ static void populate_symbol_children(struct hist_entry *he)
 		struct hist_entry *child_he;
 
 		if (!rel_sym || !rel_sym->sym) {
-			if (verbose)
-				printf("populate_symbol_children: invalid related_symbol\n");
+					c2c_debug1("populate_symbol_children: invalid related_symbol\n");
 			continue;
 		}
 
 		/* Allocate child hist_entry - simplified version for symbol children */
 		child_c2c_he = zalloc(sizeof(*child_c2c_he));
 		if (!child_c2c_he) {
-			if (verbose)
-				printf("populate_symbol_children: failed to allocate child\n");
+					c2c_debug1("populate_symbol_children: failed to allocate child\n");
 			continue;
 		}
 		
 		/* Initialize the related_symbols list */
-		INIT_LIST_HEAD(&child_c2c_he->related_symbols);
+		init_c2c_he_related_symbols(child_c2c_he);
 
 		child_he = &child_c2c_he->he;
 
@@ -3046,7 +3089,7 @@ static void populate_symbol_children(struct hist_entry *he)
 
 		/* Copy c2c stats - this is what c2c columns use */
 		memcpy(&child_c2c_he->stats, &rel_sym->stats, sizeof(rel_sym->stats));
-		INIT_LIST_HEAD(&child_c2c_he->related_symbols);
+		init_c2c_he_related_symbols(child_c2c_he);
 		
 		/* Child symbol entries don't need hists - browse_symbol_cachelines uses global c2c.hists */
 		child_c2c_he->hists = NULL;
@@ -3063,13 +3106,10 @@ static void populate_symbol_children(struct hist_entry *he)
 		rb_insert_color_cached(&child_he->rb_node, root, leftmost);
 		
 		count++;
-		if (verbose > 2)
-			printf("  Created child %d: %s\n", 
-			       count, rel_sym->sym->name);
+		c2c_debug3("  Created child %d: %s\n", count, rel_sym->sym->name);
 	}
 
-	if (verbose > 1)
-		printf("  Total children created: %d\n", count);
+	c2c_debug2("  Total children created: %d\n", count);
 }
 
 /*
@@ -3089,8 +3129,7 @@ static void build_symbol_associations(void)
 	struct c2c_hist_entry *c2c_he_sym;
 	int associations_found = 0;
 
-	if (verbose)
-		printf("Building symbol associations from cacheline details...\n");
+	c2c_debug1("Building symbol associations from cacheline details...\n");
 
 	/*
 	 * New approach: Use actual cacheline access details to find symbols
@@ -3182,7 +3221,7 @@ static void build_symbol_associations(void)
 									if (rel_sym) {
 										rel_sym->sym = symbols_with_hitm[j];
 										rel_sym->association_count = 1;
-										memset(&rel_sym->stats, 0, sizeof(rel_sym->stats));
+										/* zalloc already zeros memory, no need for memset */
 										list_add_tail(&rel_sym->list, &c2c_he_sym->related_symbols);
 										associations_found++;
 										
@@ -3216,8 +3255,7 @@ static void build_symbol_associations(void)
 		nd_cl = rb_next(nd_cl);
 	}
 	
-	if (verbose)
-		printf("Total symbol associations found: %d\n", associations_found);
+	c2c_debug1("Total symbol associations found: %d\n", associations_found);
 
 	/* Phase 2: Aggregate stats for related symbols */
 	nd_sym = rb_first_cached(&c2c.symbol_hists.hists.entries);
