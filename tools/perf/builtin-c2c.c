@@ -2952,10 +2952,18 @@ static void perf_c2c__hists_fprintf(FILE *out, struct perf_session *session)
 
 	/* Add symbol view in stdio mode */
 	if (build_symbol_hists() == 0) {
+		/* Count the number of entries */
+		int symbol_entries = 0;
+		struct rb_node *nd = rb_first_cached(&c2c.symbol_hists.hists.entries);
+		while (nd) {
+			struct hist_entry *he = rb_entry(nd, struct hist_entry, rb_node);
+			if (!he->filtered)
+				symbol_entries++;
+			nd = rb_next(nd);
+		}
+		
 		fprintf(out, "\n");
-		fprintf(out, "=================================================\n");
-		fprintf(out, "           Shared Data Symbols Table             \n");
-		fprintf(out, "=================================================\n");
+		fprintf(out, "Shared Data Symbols Table     (%d entries, sorted on Cycles Percent)\n", symbol_entries);
 		fprintf(out, "#\n");
 		
 		hists__fprintf(&c2c.symbol_hists.hists, true, 0, 0, 0, stdout, true);
@@ -3407,7 +3415,7 @@ static int build_symbol_hists(void)
 	/* Setup output fields for symbol view - sorted by cycles percentage (descending) */
 	/* Added iaddr to show code address */
 	ret = c2c_hists__reinit(&c2c.symbol_hists,
-		"iaddr,symbol,latency_rmt_hitm,latency_lcl_hitm,latency_load,tot_recs,cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,cycles_rmt_hitm,cycles_lcl_hitm,cycles_load,cycles_total,cycles_percent",
+		"iaddr,symbol,cycles_percent,cycles_total,latency_rmt_hitm,latency_lcl_hitm,latency_load,tot_recs,cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,cycles_rmt_hitm,cycles_lcl_hitm,cycles_load",
 		"cycles_percent");
 	if (ret)
 		return ret;
@@ -3708,7 +3716,7 @@ static int perf_c2c_symbol_browser__title(struct hist_browser *browser,
 		  "Shared Data Symbols Table     "
 		  "(%lu entries, sorted on %s)",
 		  browser->nr_non_filtered_entries,
-		  display_str[c2c.display]);
+		  "Cycles Percent");
 	return 0;
 }
 
