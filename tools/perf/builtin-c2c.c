@@ -95,6 +95,7 @@ static char const *coalesce_default = "iaddr";
 struct related_symbol {
 	struct list_head	 list;
 	struct symbol		*sym;
+	uint64_t		 iaddr;  /* Code address for this symbol */
 	struct c2c_stats	 stats;  /* Aggregated stats for this related symbol */
 	int			 association_count;  /* Number of shared cachelines */
 };
@@ -228,6 +229,12 @@ static void free_child_entries(struct hist_entry *parent_he)
 		if (child_he->stat_acc) {
 			free(child_he->stat_acc);
 			child_he->stat_acc = NULL;
+		}
+		
+		/* Free synthetic mem_info if allocated */
+		if (child_he->mem_info) {
+			free(child_he->mem_info);
+			child_he->mem_info = NULL;
 		}
 		
 		/* Remove from tree and free */
@@ -3049,8 +3056,17 @@ static void populate_symbol_children(struct hist_entry *he)
 
 		/* Complete initialization - copy parent's map_symbol structure first */
 		memcpy(&child_he->ms, &he->ms, sizeof(struct map_symbol));
-		/* Then override the symbol */
+		/* Then override the symbol and address */
 		child_he->ms.sym = rel_sym->sym;
+		
+		/* Create a synthetic mem_info to store the iaddr for proper display */
+		if (he->mem_info) {
+			child_he->mem_info = memdup(he->mem_info, sizeof(*he->mem_info));
+			if (child_he->mem_info) {
+				/* Set the instruction address to the related symbol's iaddr */
+				mem_info__iaddr(child_he->mem_info)->addr = rel_sym->iaddr;
+			}
+		}
 		
 		/* Copy essential fields from parent */
 		child_he->thread = he->thread;
@@ -3155,7 +3171,10 @@ static void build_symbol_associations(void)
 	while (nd_cl) {
 		struct hist_entry *he_cl = rb_entry(nd_cl, struct hist_entry, rb_node);
 		struct c2c_hist_entry *c2c_he_cl = container_of(he_cl, struct c2c_hist_entry, he);
-		struct symbol **symbols_with_hitm = NULL;
+		struct symbol_addr_pair {
+			struct symbol *sym;
+			uint64_t iaddr;
+		} *symbols_with_hitm = NULL;
 		int symbol_count = 0;
 		int symbol_capacity = 0;
 		struct rb_node *next_detail;
@@ -3168,7 +3187,7 @@ static void build_symbol_associations(void)
 			continue;
 		}
 		
-		/* Collect all symbols that accessed this cacheline with HITM */
+		/* Collect all (symbol, address) pairs that accessed this cacheline with HITM */
 		next_detail = rb_first_cached(&c2c_he_cl->hists->hists.entries);
 		while (next_detail) {
 			struct hist_entry *he_detail = rb_entry(next_detail, struct hist_entry, rb_node);
@@ -3176,10 +3195,13 @@ static void build_symbol_associations(void)
 			
 			if (he_detail->ms.sym && 
 			    (c2c_he_detail->stats.rmt_hitm + c2c_he_detail->stats.lcl_hitm) > 0) {
-				/* Add symbol to list if not already there */
+				uint64_t iaddr = he_detail->mem_info ? mem_info__iaddr(he_detail->mem_info)->addr : he_detail->ms.sym->start;
+				
+				/* Add (symbol, iaddr) pair to list if not already there */
 				bool found = false;
 				for (i = 0; i < symbol_count; i++) {
-					if (symbols_with_hitm[i] == he_detail->ms.sym) {
+					if (symbols_with_hitm[i].sym == he_detail->ms.sym && 
+					    symbols_with_hitm[i].iaddr == iaddr) {
 						found = true;
 						break;
 					}
@@ -3189,10 +3211,13 @@ static void build_symbol_associations(void)
 					if (symbol_count >= symbol_capacity) {
 						symbol_capacity = symbol_capacity ? symbol_capacity * 2 : 4;
 						symbols_with_hitm = realloc(symbols_with_hitm, 
-									    symbol_capacity * sizeof(struct symbol *));
+									    symbol_capacity * sizeof(struct symbol_addr_pair));
 					}
-					if (symbols_with_hitm)
-						symbols_with_hitm[symbol_count++] = he_detail->ms.sym;
+					if (symbols_with_hitm) {
+						symbols_with_hitm[symbol_count].sym = he_detail->ms.sym;
+						symbols_with_hitm[symbol_count].iaddr = iaddr;
+						symbol_count++;
+					}
 				}
 			}
 			
@@ -3206,7 +3231,7 @@ static void build_symbol_associations(void)
 				nd_sym = rb_first_cached(&c2c.symbol_hists.hists.entries);
 				while (nd_sym) {
 					he_sym = rb_entry(nd_sym, struct hist_entry, rb_node);
-					if (he_sym->ms.sym == symbols_with_hitm[i]) {
+					if (he_sym->ms.sym == symbols_with_hitm[i].sym) {
 						c2c_he_sym = container_of(he_sym, struct c2c_hist_entry, he);
 						
 						/* Add all other symbols as related */
@@ -3214,10 +3239,23 @@ static void build_symbol_associations(void)
 							if (i != j) {
 								struct related_symbol *rel_sym;
 								bool exists = false;
+								uint64_t parent_iaddr;
+								
+								/* Get parent symbol's iaddr for comparison */
+								parent_iaddr = he_sym->mem_info ? 
+									mem_info__iaddr(he_sym->mem_info)->addr : 
+									(he_sym->ms.sym ? he_sym->ms.sym->start : 0);
+								
+								/* Skip if this related symbol is identical to parent */
+								if (symbols_with_hitm[j].sym == he_sym->ms.sym && 
+								    symbols_with_hitm[j].iaddr == parent_iaddr) {
+									continue;
+								}
 								
 								/* Check if already added */
 								list_for_each_entry(rel_sym, &c2c_he_sym->related_symbols, list) {
-									if (rel_sym->sym == symbols_with_hitm[j]) {
+									if (rel_sym->sym == symbols_with_hitm[j].sym && 
+									    rel_sym->iaddr == symbols_with_hitm[j].iaddr) {
 										exists = true;
 										rel_sym->association_count++;
 										break;
@@ -3227,7 +3265,8 @@ static void build_symbol_associations(void)
 								if (!exists) {
 									rel_sym = zalloc(sizeof(*rel_sym));
 									if (rel_sym) {
-										rel_sym->sym = symbols_with_hitm[j];
+										rel_sym->sym = symbols_with_hitm[j].sym;
+										rel_sym->iaddr = symbols_with_hitm[j].iaddr;
 										rel_sym->association_count = 1;
 										/* zalloc already zeros memory, no need for memset */
 										list_add_tail(&rel_sym->list, &c2c_he_sym->related_symbols);
@@ -3236,8 +3275,8 @@ static void build_symbol_associations(void)
 										if (verbose > 1) {
 											uint64_t cl_addr = cl_address(mem_info__daddr(he_cl->mem_info)->addr, chk_double_cl);
 											printf("  Association: %s <-> %s (cacheline 0x%lx)\n",
-											       symbols_with_hitm[i]->name, 
-											       symbols_with_hitm[j]->name,
+											       symbols_with_hitm[i].sym->name, 
+											       symbols_with_hitm[j].sym->name,
 											       cl_addr);
 										}
 									}
