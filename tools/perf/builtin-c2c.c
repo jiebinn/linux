@@ -3332,6 +3332,59 @@ static void build_symbol_associations(void)
 
 
 
+/* Structure to aggregate symbol stats */
+struct symbol_entry {
+	uint64_t iaddr;
+	struct symbol *sym;
+	struct map *map;
+	struct maps *maps;
+	struct c2c_stats stats;
+	struct compute_stats cstats;
+	uint64_t samples;
+	struct symbol_entry *next;
+};
+
+/* Simple hash table for symbol aggregation */
+#define SYMBOL_HASH_SIZE 1024
+static struct symbol_entry *symbol_hash[SYMBOL_HASH_SIZE];
+
+static unsigned int symbol_hash_func(uint64_t iaddr, struct symbol *sym)
+{
+	return (iaddr ^ (unsigned long)sym) % SYMBOL_HASH_SIZE;
+}
+
+static struct symbol_entry *find_or_create_symbol_entry(uint64_t iaddr, struct symbol *sym, struct map *map, struct maps *maps)
+{
+	unsigned int hash = symbol_hash_func(iaddr, sym);
+	struct symbol_entry *entry;
+	
+	/* Search for existing entry */
+	for (entry = symbol_hash[hash]; entry; entry = entry->next) {
+		if (entry->iaddr == iaddr && entry->sym == sym) {
+			return entry;
+		}
+	}
+	
+	/* Create new entry */
+	entry = zalloc(sizeof(*entry));
+	if (!entry)
+		return NULL;
+	
+	entry->iaddr = iaddr;
+	entry->sym = sym;
+	entry->map = map;
+	entry->maps = maps;
+	memset(&entry->stats, 0, sizeof(entry->stats));
+	memset(&entry->cstats, 0, sizeof(entry->cstats));
+	entry->samples = 0;
+	
+	/* Add to hash table */
+	entry->next = symbol_hash[hash];
+	symbol_hash[hash] = entry;
+	
+	return entry;
+}
+
 static int build_symbol_hists(void)
 {
 	struct rb_node *next = rb_first_cached(&c2c.hists.hists.entries);
@@ -3340,16 +3393,21 @@ static int build_symbol_hists(void)
 	struct addr_location al;
 	struct perf_sample sample = {};
 	struct thread *synthetic_thread = NULL;
-	int ret;
+	struct symbol_entry *entry;
+	int ret, i;
+	
+	/* Initialize symbol hash table */
+	memset(symbol_hash, 0, sizeof(symbol_hash));
 
-	/* Initialize symbol hists with sort by symbol only */
-	ret = c2c_hists__init(&c2c.symbol_hists, "symbol", 2);
+	/* Initialize symbol hists with sort by iaddr (code address) and symbol */
+	ret = c2c_hists__init(&c2c.symbol_hists, "iaddr,symbol", 2);
 	if (ret)
 		return ret;
 
 	/* Setup output fields for symbol view - sorted by cycles percentage (descending) */
+	/* Added iaddr to show code address */
 	ret = c2c_hists__reinit(&c2c.symbol_hists,
-		"symbol,latency_rmt_hitm,latency_lcl_hitm,latency_load,tot_recs,cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,cycles_rmt_hitm,cycles_lcl_hitm,cycles_load,cycles_total,cycles_percent",
+		"iaddr,symbol,latency_rmt_hitm,latency_lcl_hitm,latency_load,tot_recs,cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,cycles_rmt_hitm,cycles_lcl_hitm,cycles_load,cycles_total,cycles_percent",
 		"cycles_percent");
 	if (ret)
 		return ret;
@@ -3359,68 +3417,17 @@ static int build_symbol_hists(void)
 		struct hist_entry *first_he = rb_entry(next, struct hist_entry, rb_node);
 		synthetic_thread = first_he->thread;
 	}
-
-	/* Iterate through cacheline entries and aggregate by symbol */
+	
+	/* First pass: aggregate all stats by (iaddr, symbol) */
+	/* Only process detailed entries within cachelines to avoid double-counting */
 	while (next) {
 		struct rb_node *next_cl;
 
 		he = rb_entry(next, struct hist_entry, rb_node);
 		c2c_he = container_of(he, struct c2c_hist_entry, he);
 
-		/* Process the cacheline's own symbol if it exists */
-		if (he->ms.sym && !he->filtered) {
-			struct symbol *sym = he->ms.sym;
-
-			/* Create consistent address location for symbol aggregation */
-			addr_location__init(&al);
-			al.thread = synthetic_thread; /* Use same thread for all symbols */
-			al.maps = he->ms.maps;
-			al.map = he->ms.map;
-			al.sym = sym;
-			al.addr = sym->start; /* Use symbol start address */
-			al.level = PERF_RECORD_MISC_KERNEL;
-			al.cpumode = PERF_RECORD_MISC_KERNEL;
-			al.cpu = 0; /* Same CPU for all */
-			al.socket = 0; /* Same socket for all */
-
-			/* Create sample with consistent values for aggregation */
-			sample.period = he->stat.period;
-			sample.weight = he->stat.weight1;
-			sample.ip = sym->start; /* Use symbol start for IP */
-			sample.pid = synthetic_thread ? thread__pid(synthetic_thread) : 0;
-			sample.tid = synthetic_thread ? thread__tid(synthetic_thread) : 0;
-			sample.cpu = 0;
-
-			/* Add entry - should aggregate by symbol name now */
-			he_sym = hists__add_entry_ops(&c2c.symbol_hists.hists,
-							 &c2c_entry_ops,
-							 &al, NULL, NULL, NULL, NULL,
-							 &sample, true);
-
-			addr_location__exit(&al);
-
-			if (he_sym) {
-				c2c_he_sym = container_of(he_sym, struct c2c_hist_entry, he);
-
-				/* Add stats to the symbol entry */
-				c2c_add_stats(&c2c_he_sym->stats, &c2c_he->stats);
-				c2c_add_stats(&c2c.symbol_hists.stats, &c2c_he->stats);
-				
-				/* Also merge the compute stats (latency info) */
-				c2c_add_cstats(&c2c_he_sym->cstats, &c2c_he->cstats);
-
-				hists__inc_nr_samples(&c2c.symbol_hists.hists, he_sym->filtered);
-				
-				if (verbose > 2)
-					printf("Symbol %s: added stats - tot_hitm=%u, lcl_hitm=%u, rmt_hitm=%u\n",
-					       sym->name, 
-					       c2c_he->stats.rmt_hitm + c2c_he->stats.lcl_hitm,
-					       c2c_he->stats.lcl_hitm,
-					       c2c_he->stats.rmt_hitm);
-			}
-		}
-
-		/* Now iterate through all accesses to this cacheline */
+		/* Only iterate through detailed accesses to this cacheline */
+		/* Skip the cacheline's own data to avoid double-counting */
 		if (c2c_he->hists && c2c_he->hists->hists.entries.rb_root.rb_node) {
 			next_cl = rb_first_cached(&c2c_he->hists->hists.entries);
 			
@@ -3434,52 +3441,13 @@ static int build_symbol_hists(void)
 				sym_cl = he_cl->ms.sym;
 
 				if (sym_cl && !he_cl->filtered) {
-					/* Create consistent address location for symbol aggregation */
-					addr_location__init(&al);
-					al.thread = synthetic_thread; /* Use same thread for all symbols */
-					al.maps = he_cl->ms.maps;
-					al.map = he_cl->ms.map;
-					al.sym = sym_cl;
-					al.addr = sym_cl->start; /* Use symbol start address */
-					al.level = PERF_RECORD_MISC_KERNEL;
-					al.cpumode = PERF_RECORD_MISC_KERNEL;
-					al.cpu = 0; /* Same CPU for all */
-					al.socket = 0; /* Same socket for all */
-
-					/* Create sample with consistent values for aggregation */
-					sample.period = he_cl->stat.period;
-					sample.weight = he_cl->stat.weight1;
-					sample.ip = sym_cl->start; /* Use symbol start for IP */
-					sample.pid = synthetic_thread ? thread__pid(synthetic_thread) : 0;
-					sample.tid = synthetic_thread ? thread__tid(synthetic_thread) : 0;
-					sample.cpu = 0;
-
-					/* Add entry - should aggregate by symbol name now */
-					he_sym = hists__add_entry_ops(&c2c.symbol_hists.hists,
-									 &c2c_entry_ops,
-									 &al, NULL, NULL, NULL, NULL,
-									 &sample, true);
-
-					addr_location__exit(&al);
-
-					if (he_sym) {
-						c2c_he_sym = container_of(he_sym, struct c2c_hist_entry, he);
-
-						/* Add stats to the symbol entry */
-						c2c_add_stats(&c2c_he_sym->stats, &c2c_he_cl->stats);
-						c2c_add_stats(&c2c.symbol_hists.stats, &c2c_he_cl->stats);
-
-						/* Also merge the compute stats (latency info) */
-						c2c_add_cstats(&c2c_he_sym->cstats, &c2c_he_cl->cstats);
-
-						hists__inc_nr_samples(&c2c.symbol_hists.hists, he_sym->filtered);
-						
-						if (verbose > 2)
-							printf("Symbol %s (from cacheline details): added stats - tot_hitm=%u, lcl_hitm=%u, rmt_hitm=%u\n",
-							       sym_cl->name, 
-							       c2c_he_cl->stats.rmt_hitm + c2c_he_cl->stats.lcl_hitm,
-							       c2c_he_cl->stats.lcl_hitm,
-							       c2c_he_cl->stats.rmt_hitm);
+					uint64_t iaddr_cl = he_cl->mem_info ? mem_info__iaddr(he_cl->mem_info)->addr : sym_cl->start;
+					
+					entry = find_or_create_symbol_entry(iaddr_cl, sym_cl, he_cl->ms.map, he_cl->ms.maps);
+					if (entry) {
+						c2c_add_stats(&entry->stats, &c2c_he_cl->stats);
+						c2c_add_cstats(&entry->cstats, &c2c_he_cl->cstats);
+						entry->samples++;
 					}
 				}
 
@@ -3489,8 +3457,87 @@ static int build_symbol_hists(void)
 
 		next = rb_next(&he->rb_node);
 	}
+	
+	/* Second pass: create histogram entries for all unique (iaddr, symbol) combinations */
+	for (i = 0; i < SYMBOL_HASH_SIZE; i++) {
+		for (entry = symbol_hash[i]; entry; entry = entry->next) {
+			/* Create mem_info with proper instruction address for display */
+			struct mem_info *mi_display = mem_info__new();
+			if (mi_display) {
+				mem_info__iaddr(mi_display)->addr = entry->iaddr;
+				mem_info__iaddr(mi_display)->ms.maps = entry->maps;
+				mem_info__iaddr(mi_display)->ms.map = entry->map;
+				mem_info__iaddr(mi_display)->ms.sym = entry->sym;
+				/* Set data address to 0 for consistent display */
+				mem_info__daddr(mi_display)->addr = 0;
+			}
 
-	/* Resort symbol hists by tot_hitm */
+			/* Create consistent address location for symbol aggregation */
+			addr_location__init(&al);
+			al.thread = synthetic_thread;
+			al.maps = entry->maps;
+			al.map = entry->map;
+			al.sym = entry->sym;
+			al.addr = entry->iaddr;
+			al.level = PERF_RECORD_MISC_KERNEL;
+			al.cpumode = PERF_RECORD_MISC_KERNEL;
+			al.cpu = 0;
+			al.socket = 0;
+			al.filtered = 0;
+
+			/* Create sample with consistent values */
+			sample.period = 1;
+			sample.weight = 1;
+			sample.ip = entry->iaddr;
+			sample.pid = synthetic_thread ? thread__pid(synthetic_thread) : 0;
+			sample.tid = synthetic_thread ? thread__tid(synthetic_thread) : 0;
+			sample.cpu = 0;
+			sample.time = 0;
+			sample.addr = 0;
+			sample.id = 0;
+
+			/* Add entry to histogram with mem_info for proper address display */
+			he_sym = hists__add_entry_ops(&c2c.symbol_hists.hists,
+						      &c2c_entry_ops,
+						      &al, NULL, NULL, mi_display, NULL,
+						      &sample, true);
+
+			addr_location__exit(&al);
+			if (mi_display)
+				mem_info__put(mi_display);
+
+			if (he_sym) {
+				c2c_he_sym = container_of(he_sym, struct c2c_hist_entry, he);
+
+				/* Copy aggregated stats to the symbol entry */
+				c2c_he_sym->stats = entry->stats;
+				c2c_he_sym->cstats = entry->cstats;
+				c2c_add_stats(&c2c.symbol_hists.stats, &entry->stats);
+
+				hists__inc_nr_samples(&c2c.symbol_hists.hists, he_sym->filtered);
+				
+				if (verbose > 2)
+					printf("Aggregated symbol %s at 0x%lx: tot_hitm=%u, lcl_hitm=%u, rmt_hitm=%u\n",
+					       entry->sym->name, entry->iaddr,
+					       entry->stats.rmt_hitm + entry->stats.lcl_hitm,
+					       entry->stats.lcl_hitm,
+					       entry->stats.rmt_hitm);
+			}
+		}
+	}
+	
+	/* Clean up hash table */
+	for (i = 0; i < SYMBOL_HASH_SIZE; i++) {
+		struct symbol_entry *curr = symbol_hash[i];
+		while (curr) {
+			struct symbol_entry *next_entry = curr->next;
+			free(curr);
+			curr = next_entry;
+		}
+		symbol_hash[i] = NULL;
+	}
+
+	/* Resort symbol hists */
 	hists__collapse_resort(&c2c.symbol_hists.hists, NULL);
 	hists__output_resort(&c2c.symbol_hists.hists, NULL);
 
