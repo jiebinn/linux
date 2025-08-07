@@ -3415,7 +3415,7 @@ static int build_symbol_hists(void)
 	/* Setup output fields for symbol view - sorted by cycles percentage (descending) */
 	/* Added iaddr to show code address */
 	ret = c2c_hists__reinit(&c2c.symbol_hists,
-		"iaddr,symbol,cycles_percent,cycles_total,latency_rmt_hitm,latency_lcl_hitm,latency_load,tot_recs,cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,cycles_rmt_hitm,cycles_lcl_hitm,cycles_load",
+		"cycles_percent,iaddr,symbol,cycles_total,latency_rmt_hitm,latency_lcl_hitm,latency_load,tot_recs,cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,cycles_rmt_hitm,cycles_lcl_hitm,cycles_load",
 		"cycles_percent");
 	if (ret)
 		return ret;
