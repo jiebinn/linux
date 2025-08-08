@@ -714,6 +714,13 @@ iaddr_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	if (he->mem_info)
 		addr = mem_info__iaddr(he->mem_info)->addr;
 
+    if (he->parent_he) {
+        /* Indent child addresses by 4 spaces but preserve column width */
+        char out[40];
+        scnprintf(out, sizeof(out), "    %s", HEX_STR(buf, addr));
+        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+    }
+
 	return scnprintf(hpp->buf, hpp->size, "%*s", width, HEX_STR(buf, addr));
 }
 
@@ -1041,7 +1048,6 @@ PERCENT_FN(rmt_hitm)
 PERCENT_FN(lcl_hitm)
 PERCENT_FN(rmt_peer)
 PERCENT_FN(lcl_peer)
-PERCENT_FN(st_l1hit)
 PERCENT_FN(st_l1miss)
 PERCENT_FN(st_na)
 
@@ -1169,35 +1175,50 @@ percent_rmt_peer_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	return per_left - per_right;
 }
 
-static int
-percent_stores_l1hit_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-			   struct hist_entry *he)
+/* Percent of Store Refs (L1 Hit + L1 Miss) */
+static double percent_store_refs(struct c2c_hist_entry *c2c_he)
 {
-	int width = c2c_width(fmt, hpp, he->hists);
-	double per = PERCENT(he, st_l1hit);
-	char buf[10];
-
-	return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
+    struct c2c_hists *hists = container_of(c2c_he->he.hists, struct c2c_hists, hists);
+    uint64_t st = (uint64_t)c2c_he->stats.st_l1hit + (uint64_t)c2c_he->stats.st_l1miss;
+    uint64_t tot = (uint64_t)hists->stats.st_l1hit + (uint64_t)hists->stats.st_l1miss;
+    return tot ? (100.0 * (double)st / (double)tot) : 0.0;
 }
 
 static int
-percent_stores_l1hit_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-			   struct hist_entry *he)
+percent_store_refs_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+                         struct hist_entry *he)
 {
-	return percent_color(fmt, hpp, he, percent_st_l1hit);
+    int width = c2c_width(fmt, hpp, he->hists);
+    char buf[10];
+    struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
+    double per = percent_store_refs(c2c_he);
+
+    if (he->parent_he) {
+        /* Indent child Store Refs by 4 spaces but preserve column width */
+        char out[32];
+        scnprintf(out, sizeof(out), "    %s", PERC_STR(buf, per));
+        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+    }
+
+    return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
+}
+
+static int
+percent_store_refs_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+                         struct hist_entry *he)
+{
+    return percent_color(fmt, hpp, he, percent_store_refs);
 }
 
 static int64_t
-percent_stores_l1hit_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
-			struct hist_entry *left, struct hist_entry *right)
+percent_store_refs_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
+                       struct hist_entry *left, struct hist_entry *right)
 {
-	double per_left;
-	double per_right;
-
-	per_left  = PERCENT(left, st_l1hit);
-	per_right = PERCENT(right, st_l1hit);
-
-	return per_left - per_right;
+    struct c2c_hist_entry *c2c_left  = container_of(left, struct c2c_hist_entry, he);
+    struct c2c_hist_entry *c2c_right = container_of(right, struct c2c_hist_entry, he);
+    double per_left  = percent_store_refs(c2c_left);
+    double per_right = percent_store_refs(c2c_right);
+    return per_left - per_right;
 }
 
 static int
@@ -1790,11 +1811,11 @@ static struct c2c_dimension dim_percent_lcl_peer = {
 };
 
 static struct c2c_dimension dim_percent_stores_l1hit = {
-	.header		= HEADER_SPAN("------- Store Refs ------", "L1 Hit", 2),
-	.name		= "percent_stores_l1hit",
-	.cmp		= percent_stores_l1hit_cmp,
-	.entry		= percent_stores_l1hit_entry,
-	.color		= percent_stores_l1hit_color,
+	.header		= HEADER_LOW("Store Refs"),
+	.name		= "percent_store_refs",
+	.cmp		= percent_store_refs_cmp,
+	.entry		= percent_store_refs_entry,
+	.color		= percent_store_refs_color,
 	.width		= 7,
 };
 
@@ -1862,11 +1883,11 @@ symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 			len = symbol_width(he->hists, dim->se);
 	}
 
-	/* For child entries (related symbols), add indentation */
-	if (he->parent_he) {
-		/* This is a related symbol child entry - TUI browser handles folding signs */
-		return scnprintf(hpp->buf, hpp->size, "    %s", symname);
-	}
+    /* For child entries (related symbols), add indentation */
+    if (he->parent_he) {
+        /* Indent child symbols by 4 spaces */
+        return scnprintf(hpp->buf, hpp->size, "    %s", symname);
+    }
 
 	/* For top-level entries, let TUI browser handle the folding sign */
 	return scnprintf(hpp->buf, hpp->size, "%s", symname);
@@ -1875,6 +1896,7 @@ symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 static struct c2c_dimension dim_symbol = {
 	.name		= "symbol",
 	.se		= &sort_sym,
+	.entry		= symbol_entry,
 };
 
 static struct c2c_dimension dim_dso = {
@@ -1936,13 +1958,18 @@ cycles_rmt_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		      struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
-	int width = c2c_width(fmt, hpp, he->hists);
+    int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t cycles;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
-	cycles = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
+    cycles = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
 
-	return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
+    if (he->parent_he) {
+        /* Indent child metrics by 4 spaces */
+        return scnprintf(hpp->buf, hpp->size, "    %llu", cycles);
+    }
+
+    return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
 }
 
 static int
@@ -1950,13 +1977,19 @@ cycles_lcl_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		      struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
-	int width = c2c_width(fmt, hpp, he->hists);
+    int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t cycles;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
-	cycles = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
+    cycles = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
 
-	return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
+    if (he->parent_he) {
+        char out[48];
+        scnprintf(out, sizeof(out), "    %llu", cycles);
+        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+    }
+
+    return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
 }
 
 static int
@@ -1964,14 +1997,20 @@ cycles_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		  struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
-	int width = c2c_width(fmt, hpp, he->hists);
+    int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t cycles, other_load;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
-	cycles = avg_stats(&c2c_he->cstats.load) * other_load;
+    cycles = avg_stats(&c2c_he->cstats.load) * other_load;
 
-	return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
+    if (he->parent_he) {
+        char out[48];
+        scnprintf(out, sizeof(out), "    %llu", cycles);
+        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+    }
+
+    return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
 }
 
 static int
@@ -1979,17 +2018,22 @@ cycles_total_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		   struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
-	int width = c2c_width(fmt, hpp, he->hists);
+    int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
 	cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
 	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
-	cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
+    cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
 
-	return scnprintf(hpp->buf, hpp->size, "%*llu", width,
-			 cycles_rmt + cycles_lcl + cycles_load);
+    if (he->parent_he) {
+        return scnprintf(hpp->buf, hpp->size, "    %llu",
+                 cycles_rmt + cycles_lcl + cycles_load);
+    }
+
+    return scnprintf(hpp->buf, hpp->size, "%*llu", width,
+             cycles_rmt + cycles_lcl + cycles_load);
 }
 
 static int
@@ -1997,13 +2041,19 @@ cnt_other_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		     struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
-	int width = c2c_width(fmt, hpp, he->hists);
+    int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t other_load;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
 
-	return scnprintf(hpp->buf, hpp->size, "%*llu", width, other_load);
+    if (he->parent_he) {
+        char out[48];
+        scnprintf(out, sizeof(out), "    %llu", other_load);
+        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+    }
+
+    return scnprintf(hpp->buf, hpp->size, "%*llu", width, other_load);
 }
 
 /* Function to calculate total cycles for all symbols for percentage calculation */
@@ -2051,6 +2101,13 @@ cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		percent = (double)symbol_cycles / total_cycles * 100.0;
 	else
 		percent = 0.0;
+
+    if (he->parent_he) {
+        /* Indent child percentages by 4 spaces but preserve column width */
+        char out[32];
+        scnprintf(out, sizeof(out), "    %.2f%%", percent);
+        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+    }
 
 	return scnprintf(hpp->buf, hpp->size, "%*.2f%%", width-1, percent);
 }
@@ -3462,8 +3519,11 @@ static int build_symbol_hists(void)
 
 	/* Setup output fields for symbol view - sorted by cycles percentage (descending) */
 	/* Added iaddr to show code address */
+    //ret = c2c_hists__reinit(&c2c.symbol_hists,
+    //    "cycles_percent,percent_store_refs,iaddr,symbol,cycles_total,stores_l1hit,latency_rmt_hitm,latency_lcl_hitm,latency_load,tot_recs,cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,cycles_rmt_hitm,cycles_lcl_hitm,cycles_load",
+    //    "cycles_percent");
 	ret = c2c_hists__reinit(&c2c.symbol_hists,
-		"cycles_percent,iaddr,symbol,cycles_total,latency_rmt_hitm,latency_lcl_hitm,latency_load,tot_recs,cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,cycles_rmt_hitm,cycles_lcl_hitm,cycles_load",
+		"cycles_percent,percent_store_refs,iaddr,symbol",
 		"cycles_percent");
 	if (ret)
 		return ret;
@@ -4319,7 +4379,7 @@ static int build_cl_output(char *cl_sort, bool no_source)
 						  "percent_lcl_peer," :
 						  "percent_rmt_hitm,"
 						  "percent_lcl_hitm,",
-		"percent_stores_l1hit,"
+"percent_store_refs,"
 		"percent_stores_l1miss,"
 		"percent_stores_na,"
 		"offset,offset_node,dcacheline_count,",
