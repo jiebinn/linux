@@ -1712,7 +1712,7 @@ static struct c2c_dimension dim_ld_fbhit = {
 };
 
 static struct c2c_dimension dim_ld_l1hit = {
-	.header		= HEADER_SPAN_LOW("L1"),
+	.header		= HEADER_SPAN_LOW("L1 Load"),
 	.name		= "ld_l1hit",
 	.cmp		= ld_l1hit_cmp,
 	.entry		= ld_l1hit_entry,
@@ -1720,7 +1720,7 @@ static struct c2c_dimension dim_ld_l1hit = {
 };
 
 static struct c2c_dimension dim_ld_l2hit = {
-	.header		= HEADER_SPAN_LOW("L2"),
+	.header		= HEADER_SPAN_LOW("L2 Load"),
 	.name		= "ld_l2hit",
 	.cmp		= ld_l2hit_cmp,
 	.entry		= ld_l2hit_entry,
@@ -3832,14 +3832,14 @@ static int perf_c2c_symbol_browser__title(struct hist_browser *browser,
 static char symbol_cacheline_browser_symbol_name[256];
 
 static int perf_c2c_symbol_cacheline_browser__title(struct hist_browser *browser,
-						   char *bf, size_t size)
+                                                   char *bf, size_t size)
 {
-	scnprintf(bf, size,
-		  "Cachelines accessed by symbol: %s     "
-		  "(%lu entries, sorted on %s)",
-		  symbol_cacheline_browser_symbol_name,
-		  browser->nr_non_filtered_entries,
-		  display_str[c2c.display]);
+    scnprintf(bf, size,
+              "Cachelines accessed by symbol: %s     "
+              "(%lu entries, sorted on %s)",
+              symbol_cacheline_browser_symbol_name,
+              browser->nr_non_filtered_entries,
+              display_str[c2c.display]);
 	return 0;
 }
 
@@ -3865,6 +3865,8 @@ static int perf_c2c__browse_symbol_cachelines(struct hist_entry *he_sym)
 	struct hist_browser *browser;
 	struct rb_node *next;
 	struct symbol *target_sym;
+    uint64_t target_iaddr = 0;
+    bool filter_by_iaddr = false;
 	int key = -1;
 	static const char help[] =
 	" ENTER         Toggle callchains (if present) \n"
@@ -3875,15 +3877,26 @@ static int perf_c2c__browse_symbol_cachelines(struct hist_entry *he_sym)
 	if (!he_sym)
 		return 0;
 
-	/* Handle both parent symbols and child symbols */
-	target_sym = he_sym->ms.sym;
+    /* Handle both parent symbols and child symbols */
+    target_sym = he_sym->ms.sym;
 
 	if (!target_sym)
 		return 0;
 
-	/* Store symbol name for title */
-	snprintf(symbol_cacheline_browser_symbol_name, sizeof(symbol_cacheline_browser_symbol_name),
-		 "%s", target_sym->name);
+    /* Determine if we should filter by code address (child symbol entries have specific iaddr) */
+    if (he_sym->parent_he && he_sym->mem_info) {
+        target_iaddr = mem_info__iaddr(he_sym->mem_info)->addr;
+        filter_by_iaddr = (target_iaddr != 0);
+    }
+
+    /* Store title: include iaddr when available */
+    if (filter_by_iaddr) {
+        scnprintf(symbol_cacheline_browser_symbol_name, sizeof(symbol_cacheline_browser_symbol_name),
+                  "%s@0x%lx", target_sym->name, target_iaddr);
+    } else {
+        scnprintf(symbol_cacheline_browser_symbol_name, sizeof(symbol_cacheline_browser_symbol_name),
+                  "%s", target_sym->name);
+    }
 
 	/* Create a temporary hists for this symbol's cachelines */
 	c2c_hists = zalloc(sizeof(*c2c_hists));
@@ -3896,9 +3909,14 @@ static int perf_c2c__browse_symbol_cachelines(struct hist_entry *he_sym)
 	}
 
 	/* Setup output fields to show cacheline info */
-	if (c2c_hists__reinit(c2c_hists, 
-			      "dcacheline,tot_hitm,lcl_hitm,rmt_hitm,tot_recs,cpucnt",
-			      "tot_hitm,lcl_hitm,rmt_hitm") < 0) {
+    if (c2c_hists__reinit(c2c_hists,
+                          "dcacheline,tot_hitm,lcl_hitm,rmt_hitm,tot_recs,"
+                          "stores_l1hit,stores_l1miss,"
+                          "ld_l1hit,ld_l2hit,ld_llchit,"
+                          "cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,"
+                          "cycles_total,latency_rmt_hitm,latency_lcl_hitm,latency_load,"
+                          "cpucnt",
+                          "tot_hitm,lcl_hitm,rmt_hitm") < 0) {
 		free(c2c_hists);
 		return -1;
 	}
@@ -3909,7 +3927,8 @@ static int perf_c2c__browse_symbol_cachelines(struct hist_entry *he_sym)
 		struct hist_entry *he = rb_entry(next, struct hist_entry, rb_node);
 		struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
 		struct rb_node *next_cl;
-		struct c2c_stats cacheline_stats = { .nr_entries = 0 };
+        struct c2c_stats cacheline_stats = { .nr_entries = 0 };
+        struct compute_stats cacheline_cstats = {};
 		bool found_symbol = false;
 		
 		if (!he->mem_info || he->filtered || !c2c_he->hists) {
@@ -3921,25 +3940,29 @@ static int perf_c2c__browse_symbol_cachelines(struct hist_entry *he_sym)
 		if (c2c_he->hists && c2c_he->hists->hists.entries.rb_root.rb_node) {
 			/* Check if this cacheline has any accesses by our target symbol */
 			next_cl = rb_first_cached(&c2c_he->hists->hists.entries);
-			while (next_cl) {
+            while (next_cl) {
 				struct hist_entry *he_cl = rb_entry(next_cl, struct hist_entry, rb_node);
 				struct c2c_hist_entry *c2c_he_cl = container_of(he_cl, struct c2c_hist_entry, he);
-				
-				if (he_cl->ms.sym == target_sym) {
-					/* Aggregate stats for this symbol's accesses to this cacheline */
-					c2c_add_stats(&cacheline_stats, &c2c_he_cl->stats);
-					found_symbol = true;
-				}
+                uint64_t he_cl_iaddr = 0;
+                if (he_cl->mem_info)
+                    he_cl_iaddr = mem_info__iaddr(he_cl->mem_info)->addr;
+
+                if (he_cl->ms.sym == target_sym && (!filter_by_iaddr || he_cl_iaddr == target_iaddr)) {
+                    /* Aggregate stats for this symbol/address accesses to this cacheline */
+                    c2c_add_stats(&cacheline_stats, &c2c_he_cl->stats);
+                    c2c_add_cstats(&cacheline_cstats, &c2c_he_cl->cstats);
+                    found_symbol = true;
+                }
 				
 				next_cl = rb_next(&he_cl->rb_node);
 			}
 		} else {
-			/* Fallback: check if the cacheline's main symbol matches */
-			if (he->ms.sym == target_sym) {
-				/* Use the cacheline's aggregated stats */
-				c2c_add_stats(&cacheline_stats, &c2c_he->stats);
-				found_symbol = true;
-			}
+            /* Fallback: for parent symbol entries only (no precise iaddr to filter) */
+            if (!filter_by_iaddr && he->ms.sym == target_sym) {
+                c2c_add_stats(&cacheline_stats, &c2c_he->stats);
+                c2c_add_cstats(&cacheline_cstats, &c2c_he->cstats);
+                found_symbol = true;
+            }
 		}
 		
 		/* If this symbol accessed this cacheline, create an entry */
@@ -3981,11 +4004,12 @@ static int perf_c2c__browse_symbol_cachelines(struct hist_entry *he_sym)
 			
 			addr_location__exit(&al);
 			
-			if (he_new) {
+            if (he_new) {
 				c2c_he_new = container_of(he_new, struct c2c_hist_entry, he);
 				
 				/* Copy only the aggregated stats for this symbol */
 				memcpy(&c2c_he_new->stats, &cacheline_stats, sizeof(cacheline_stats));
+                memcpy(&c2c_he_new->cstats, &cacheline_cstats, sizeof(cacheline_cstats));
 				
 				/* Copy other necessary fields */
 				c2c_he_new->cacheline_idx = c2c_he->cacheline_idx;
