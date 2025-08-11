@@ -3841,6 +3841,19 @@ static int perf_c2c_browser__title(struct hist_browser *browser,
 	return 0;
 }
 
+/* Custom title for pair-filtered Shared Data Cache Line Table */
+static char symbol_pair_title_info[512];
+static int perf_c2c_symbol_pair_browser__title(struct hist_browser *browser,
+                                               char *bf, size_t size)
+{
+    scnprintf(bf, size,
+              "Shared Data Cache Line Table - %s     (%lu entries, sorted on %s)",
+              symbol_pair_title_info,
+              browser->nr_non_filtered_entries,
+              display_str[c2c.display]);
+    return 0;
+}
+
 static int perf_c2c_symbol_browser__title(struct hist_browser *browser,
 					  char *bf, size_t size)
 {
@@ -4037,7 +4050,18 @@ static int perf_c2c__browse_symbol_pair_cachelines(struct hist_entry *he_child)
     hists__collapse_resort(&filtered->hists, NULL);
     hists__output_resort(&filtered->hists, NULL);
 
-    /* Open browser with standard c2c cacheline title */
+    /* Build custom title info: child and parent with code addresses */
+    if (child_sym && parent_sym) {
+        scnprintf(symbol_pair_title_info, sizeof(symbol_pair_title_info),
+                  "%s@0x%lx (parent: %s@0x%lx)",
+                  child_sym->name, child_iaddr,
+                  parent_sym->name, parent_iaddr);
+    } else {
+        scnprintf(symbol_pair_title_info, sizeof(symbol_pair_title_info),
+                  "Filtered by selected related symbol pair");
+    }
+
+    /* Open browser with custom title */
     cl_browser = c2c_cacheline_browser__new(&filtered->hists, NULL);
     if (cl_browser == NULL) {
         hists__delete_entries(&filtered->hists);
@@ -4045,7 +4069,7 @@ static int perf_c2c__browse_symbol_pair_cachelines(struct hist_entry *he_child)
         return -1;
     }
     browser = &cl_browser->hb;
-    browser->title = perf_c2c_browser__title;
+    browser->title = perf_c2c_symbol_pair_browser__title;
 
     SLang_reset_tty();
     SLang_init_tty(0, 0, 0);
