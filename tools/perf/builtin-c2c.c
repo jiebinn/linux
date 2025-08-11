@@ -4035,7 +4035,7 @@ static int perf_c2c__browse_symbol_pair_cachelines(struct hist_entry *he_child)
                 memcpy(&c2c_he_new->stats, &c2c_he->stats, sizeof(c2c_he_new->stats));
                 memcpy(&c2c_he_new->cstats, &c2c_he->cstats, sizeof(c2c_he_new->cstats));
                 /* Ensure detail view uses original cacheline details */
-                c2c_he_new->hists = NULL;
+                c2c_he_new->hists = c2c_he->hists;
                 if (c2c_he->nodestr)
                     c2c_he_new->nodestr = strdup(c2c_he->nodestr);
                 c2c_add_stats(&filtered->stats, &c2c_he_new->stats);
