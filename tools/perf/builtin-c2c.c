@@ -1191,7 +1191,22 @@ percent_store_refs_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     int width = c2c_width(fmt, hpp, he->hists);
     char buf[10];
     struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
-    double per = percent_store_refs(c2c_he);
+    double per;
+
+    /* For child symbols, scope denominator to related cachelines (siblings under parent) */
+    if (he->parent_he) {
+        struct c2c_hist_entry *parent_c2c_he = container_of(he->parent_he, struct c2c_hist_entry, he);
+        struct related_symbol *rel_sym;
+        uint64_t numer = (uint64_t)c2c_he->stats.st_l1hit + (uint64_t)c2c_he->stats.st_l1miss + (uint64_t)c2c_he->stats.st_na;
+        uint64_t denom = 0;
+
+        list_for_each_entry(rel_sym, &parent_c2c_he->related_symbols, list) {
+            denom += (uint64_t)rel_sym->stats.st_l1hit + (uint64_t)rel_sym->stats.st_l1miss + (uint64_t)rel_sym->stats.st_na;
+        }
+        per = denom ? (100.0 * (double)numer / (double)denom) : 0.0;
+    } else {
+        per = percent_store_refs(c2c_he);
+    }
 
     if (he->parent_he) {
         /* Indent child Store Refs by 4 spaces but preserve column width */
@@ -2089,18 +2104,33 @@ cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	uint64_t total_cycles;
 	double percent;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
-	cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
-	cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
-	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
-	cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
-	symbol_cycles = cycles_rmt + cycles_lcl + cycles_load;
+    c2c_he = container_of(he, struct c2c_hist_entry, he);
+    cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
+    cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
+    other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
+    cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
+    symbol_cycles = cycles_rmt + cycles_lcl + cycles_load;
 
-	total_cycles = get_total_cycles_all_symbols();
-	if (total_cycles > 0)
-		percent = (double)symbol_cycles / total_cycles * 100.0;
-	else
-		percent = 0.0;
+    /* For child symbols, scope denominator to related cachelines (siblings under parent) */
+    if (he->parent_he) {
+        struct c2c_hist_entry *parent_c2c_he;
+        struct related_symbol *rel_sym;
+        uint64_t denom_cycles = 0;
+
+        parent_c2c_he = container_of(he->parent_he, struct c2c_hist_entry, he);
+        list_for_each_entry(rel_sym, &parent_c2c_he->related_symbols, list) {
+            uint64_t rel_cycles_rmt = avg_stats(&rel_sym->cstats.rmt_hitm) * rel_sym->stats.rmt_hitm;
+            uint64_t rel_cycles_lcl = avg_stats(&rel_sym->cstats.lcl_hitm) * rel_sym->stats.lcl_hitm;
+            uint64_t rel_other_load = rel_sym->stats.load - rel_sym->stats.rmt_hitm - rel_sym->stats.lcl_hitm;
+            uint64_t rel_cycles_load = avg_stats(&rel_sym->cstats.load) * rel_other_load;
+            denom_cycles += rel_cycles_rmt + rel_cycles_lcl + rel_cycles_load;
+        }
+
+        percent = denom_cycles ? (double)symbol_cycles / denom_cycles * 100.0 : 0.0;
+    } else {
+        total_cycles = get_total_cycles_all_symbols();
+        percent = total_cycles > 0 ? (double)symbol_cycles / total_cycles * 100.0 : 0.0;
+    }
 
     if (he->parent_he) {
         /* Indent child percentages by 4 spaces but preserve column width */
@@ -3883,10 +3913,21 @@ static int perf_c2c__browse_symbol_cachelines(struct hist_entry *he_sym)
         filter_by_iaddr = (target_iaddr != 0);
     }
 
-    /* Store title: include iaddr when available */
+    /* Store title: include iaddr when available; for child, also include parent info */
     if (filter_by_iaddr) {
-        scnprintf(symbol_cacheline_browser_symbol_name, sizeof(symbol_cacheline_browser_symbol_name),
-                  "%s@0x%lx", target_sym->name, target_iaddr);
+        const char *parent_name = he_sym->parent_he && he_sym->parent_he->ms.sym ? he_sym->parent_he->ms.sym->name : NULL;
+        uint64_t parent_iaddr = 0;
+        if (he_sym->parent_he && he_sym->parent_he->mem_info)
+            parent_iaddr = mem_info__iaddr(he_sym->parent_he->mem_info)->addr;
+
+        if (parent_name) {
+            scnprintf(symbol_cacheline_browser_symbol_name, sizeof(symbol_cacheline_browser_symbol_name),
+                      "%s@0x%lx (parent: %s@0x%lx)",
+                      target_sym->name, target_iaddr, parent_name, parent_iaddr);
+        } else {
+            scnprintf(symbol_cacheline_browser_symbol_name, sizeof(symbol_cacheline_browser_symbol_name),
+                      "%s@0x%lx", target_sym->name, target_iaddr);
+        }
     } else {
         scnprintf(symbol_cacheline_browser_symbol_name, sizeof(symbol_cacheline_browser_symbol_name),
                   "%s", target_sym->name);
