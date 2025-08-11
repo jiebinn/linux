@@ -1175,12 +1175,12 @@ percent_rmt_peer_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	return per_left - per_right;
 }
 
-/* Percent of Store Refs (L1 Hit + L1 Miss) */
+/* Percent of Store Refs (Total Stores = stats.store) */
 static double percent_store_refs(struct c2c_hist_entry *c2c_he)
 {
     struct c2c_hists *hists = container_of(c2c_he->he.hists, struct c2c_hists, hists);
-    uint64_t st = (uint64_t)c2c_he->stats.st_l1hit + (uint64_t)c2c_he->stats.st_l1miss;
-    uint64_t tot = (uint64_t)hists->stats.st_l1hit + (uint64_t)hists->stats.st_l1miss;
+    uint64_t st = (uint64_t)c2c_he->stats.store;
+    uint64_t tot = (uint64_t)hists->stats.store;
     return tot ? (100.0 * (double)st / (double)tot) : 0.0;
 }
 
@@ -3305,12 +3305,6 @@ static void build_symbol_associations(void)
                                 if (i != j) {
                                     struct related_symbol *rel_sym;
                                     bool exists = false;
-
-                                    /* Skip if this related symbol is identical to parent (same sym and iaddr) */
-                                    if (symbols_with_hitm[j].sym == he_sym->ms.sym &&
-                                        symbols_with_hitm[j].iaddr == parent_iaddr) {
-                                        continue;
-                                    }
 
                                     /* Check if already added (compare both sym and iaddr) */
                                     list_for_each_entry(rel_sym, &c2c_he_sym->related_symbols, list) {
