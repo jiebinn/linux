@@ -3786,11 +3786,31 @@ static int perf_c2c__browse_cacheline(struct hist_entry *he)
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	c2c_hists = c2c_he->hists;
-	
-	/* If hists is NULL (copied entry), use the original cacheline hists */
-	if (!c2c_hists) {
-		c2c_hists = &c2c.hists;
-	}
+
+    /* If hists is NULL (copied entry), find the original cacheline hists by address */
+    if (!c2c_hists) {
+        struct rb_node *nd = rb_first_cached(&c2c.hists.hists.entries);
+        uint64_t target_addr = 0;
+        if (he->mem_info)
+            target_addr = cl_address(mem_info__daddr(he->mem_info)->addr, chk_double_cl);
+
+        while (nd) {
+            struct hist_entry *orig_he = rb_entry(nd, struct hist_entry, rb_node);
+            struct c2c_hist_entry *orig_c2c_he = container_of(orig_he, struct c2c_hist_entry, he);
+            uint64_t orig_addr = 0;
+            if (orig_he->mem_info)
+                orig_addr = cl_address(mem_info__daddr(orig_he->mem_info)->addr, chk_double_cl);
+            if (orig_addr == target_addr && orig_c2c_he->hists) {
+                c2c_hists = orig_c2c_he->hists;
+                break;
+            }
+            nd = rb_next(nd);
+        }
+
+        /* Fallback to global if not found, to avoid null deref */
+        if (!c2c_hists)
+            c2c_hists = &c2c.hists;
+    }
 
 	cl_browser = c2c_cacheline_browser__new(&c2c_hists->hists, he);
 	if (cl_browser == NULL)
@@ -3995,14 +4015,13 @@ static int perf_c2c__browse_symbol_pair_cachelines(struct hist_entry *he_child)
                 if (he_d->ms.sym == child_sym && iaddr == child_iaddr)
                     found_child = true;
                 else if (he_d->ms.sym == parent_sym && iaddr == parent_iaddr)
-                    found_parent = true;
+					found_parent = true;
 
                 nd = rb_next(&he_d->rb_node);
             }
         }
 
         if (found_child && found_parent) {
-            /* Add this cacheline row into filtered table using original stats */
             struct addr_location al;
             struct perf_sample dummy = {};
             struct hist_entry *he_new;
@@ -4025,8 +4044,9 @@ static int perf_c2c__browse_symbol_pair_cachelines(struct hist_entry *he_child)
             dummy.period = he->stat.period;
             dummy.weight = he->stat.weight1;
 
+            /* Retain mem_info so the detail RB tree remains valid across nested views */
             he_new = hists__add_entry_ops(&filtered->hists, &c2c_entry_ops,
-                                          &al, NULL, NULL, he->mem_info, NULL,
+                                          &al, NULL, NULL, mem_info__get(he->mem_info), NULL,
                                           &dummy, true);
             addr_location__exit(&al);
 
@@ -4034,8 +4054,9 @@ static int perf_c2c__browse_symbol_pair_cachelines(struct hist_entry *he_child)
                 c2c_he_new = container_of(he_new, struct c2c_hist_entry, he);
                 memcpy(&c2c_he_new->stats, &c2c_he->stats, sizeof(c2c_he_new->stats));
                 memcpy(&c2c_he_new->cstats, &c2c_he->cstats, sizeof(c2c_he_new->cstats));
-                /* Ensure detail view uses original cacheline details */
-                c2c_he_new->hists = c2c_he->hists;
+                /* Do NOT point to original cacheline hists to avoid freeing them on filtered table cleanup.
+                 * The detail browser will locate the original hists by cacheline address when needed. */
+                c2c_he_new->hists = NULL;
                 if (c2c_he->nodestr)
                     c2c_he_new->nodestr = strdup(c2c_he->nodestr);
                 c2c_add_stats(&filtered->stats, &c2c_he_new->stats);
