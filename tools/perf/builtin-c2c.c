@@ -1218,6 +1218,27 @@ percent_store_refs_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
 }
 
+/* New column: absolute total stores (st_l1hit + st_l1miss + st_na) */
+static int
+total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+                   struct hist_entry *he)
+{
+    struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
+    /* Use stats.store as authoritative total stores */
+    uint64_t total = (uint64_t)c2c_he->stats.store;
+    int width = c2c_width(fmt, hpp, he->hists);
+
+    if (he->parent_he) {
+        char out[32];
+        char num[24];
+        scnprintf(num, sizeof(num), "%" PRIu64, total);
+        scnprintf(out, sizeof(out), "    %s", num);
+        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+    }
+
+    return scnprintf(hpp->buf, hpp->size, "%*" PRIu64, width, total);
+}
+
 static int
 percent_store_refs_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
                          struct hist_entry *he)
@@ -1852,6 +1873,15 @@ static struct c2c_dimension dim_percent_stores_na = {
 	.width		= 7,
 };
 
+/* New dimension: absolute Stores count, to appear after Store Refs */
+static struct c2c_dimension dim_total_stores = {
+    .header     = HEADER_LOW("Stores"),
+    .name       = "total_stores",
+    .cmp        = store_cmp,
+    .entry      = total_stores_entry,
+    .width      = 10,
+};
+
 static struct c2c_dimension dim_dram_lcl = {
 	.header		= HEADER_SPAN("--- Load Dram ----", "Lcl", 1),
 	.name		= "dram_lcl",
@@ -2331,6 +2361,7 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_percent_stores_l1hit,
 	&dim_percent_stores_l1miss,
 	&dim_percent_stores_na,
+	&dim_total_stores,
 	&dim_dram_lcl,
 	&dim_dram_rmt,
 	&dim_pid,
@@ -3546,9 +3577,9 @@ static int build_symbol_hists(void)
     //ret = c2c_hists__reinit(&c2c.symbol_hists,
     //    "cycles_percent,percent_store_refs,iaddr,symbol,cycles_total,stores_l1hit,latency_rmt_hitm,latency_lcl_hitm,latency_load,tot_recs,cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,cycles_rmt_hitm,cycles_lcl_hitm,cycles_load",
     //    "cycles_percent");
-	ret = c2c_hists__reinit(&c2c.symbol_hists,
-		"cycles_percent,percent_store_refs,iaddr,symbol",
-		"cycles_percent");
+    ret = c2c_hists__reinit(&c2c.symbol_hists,
+        "cycles_percent,percent_store_refs,total_stores,iaddr,symbol",
+        "cycles_percent");
 	if (ret)
 		return ret;
 
