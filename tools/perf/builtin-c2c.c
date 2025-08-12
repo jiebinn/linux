@@ -3452,17 +3452,28 @@ static void build_symbol_associations(void)
 				while (next_detail) {
 					struct hist_entry *he_detail = rb_entry(next_detail, struct hist_entry, rb_node);
 					struct c2c_hist_entry *c2c_he_detail = container_of(he_detail, struct c2c_hist_entry, he);
-					
-                    if (he_detail->ms.sym == he_sym->ms.sym) {
-						target_found = true;
-						c2c_add_stats(&target_stats, &c2c_he_detail->stats);
-                        c2c_add_cstats(&target_cstats, &c2c_he_detail->cstats);
-                    } else if (he_detail->ms.sym == rel_sym->sym) {
-						related_found = true;
-						c2c_add_stats(&related_stats, &c2c_he_detail->stats);
-                        c2c_add_cstats(&related_cstats, &c2c_he_detail->cstats);
+
+					/* Match by BOTH symbol and code address (iaddr) within the same cacheline */
+					{
+						uint64_t iaddr_detail = he_detail->mem_info ?
+							mem_info__iaddr(he_detail->mem_info)->addr : 0;
+						uint64_t parent_iaddr = he_sym->mem_info ?
+							mem_info__iaddr(he_sym->mem_info)->addr :
+							(he_sym->ms.sym ? he_sym->ms.sym->start : 0);
+
+						if (he_detail->ms.sym == he_sym->ms.sym &&
+						    iaddr_detail == parent_iaddr) {
+							target_found = true;
+							c2c_add_stats(&target_stats, &c2c_he_detail->stats);
+							c2c_add_cstats(&target_cstats, &c2c_he_detail->cstats);
+						} else if (he_detail->ms.sym == rel_sym->sym &&
+						           iaddr_detail == rel_sym->iaddr) {
+							related_found = true;
+							c2c_add_stats(&related_stats, &c2c_he_detail->stats);
+							c2c_add_cstats(&related_cstats, &c2c_he_detail->cstats);
+						}
 					}
-					
+
 					next_detail = rb_next(&he_detail->rb_node);
 				}
 				
