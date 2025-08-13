@@ -4126,8 +4126,26 @@ static int perf_c2c__browse_symbol_pair_cachelines(struct hist_entry *he_child)
 
             if (he_new) {
                 c2c_he_new = container_of(he_new, struct c2c_hist_entry, he);
-                memcpy(&c2c_he_new->stats, &c2c_he->stats, sizeof(c2c_he_new->stats));
-                memcpy(&c2c_he_new->cstats, &c2c_he->cstats, sizeof(c2c_he_new->cstats));
+                /* Compute pair-specific stats for this cacheline: only the child symbol at child_iaddr */
+                {
+                    struct c2c_stats pair_stats = { .nr_entries = 0 };
+                    struct compute_stats pair_cstats = {};
+                    if (c2c_he->hists && c2c_he->hists->hists.entries.rb_root.rb_node) {
+                        struct rb_node *nd2 = rb_first_cached(&c2c_he->hists->hists.entries);
+                        while (nd2) {
+                            struct hist_entry *he_d2 = rb_entry(nd2, struct hist_entry, rb_node);
+                            struct c2c_hist_entry *c2c_he_d2 = container_of(he_d2, struct c2c_hist_entry, he);
+                            uint64_t iaddr2 = he_d2->mem_info ? mem_info__iaddr(he_d2->mem_info)->addr : 0;
+                            if (he_d2->ms.sym == child_sym && iaddr2 == child_iaddr) {
+                                c2c_add_stats(&pair_stats, &c2c_he_d2->stats);
+                                c2c_add_cstats(&pair_cstats, &c2c_he_d2->cstats);
+                            }
+                            nd2 = rb_next(&he_d2->rb_node);
+                        }
+                    }
+                    memcpy(&c2c_he_new->stats, &pair_stats, sizeof(c2c_he_new->stats));
+                    memcpy(&c2c_he_new->cstats, &pair_cstats, sizeof(c2c_he_new->cstats));
+                }
                 /* Do NOT point to original cacheline hists to avoid freeing them on filtered table cleanup.
                  * The detail browser will locate the original hists by cacheline address when needed. */
                 c2c_he_new->hists = NULL;
