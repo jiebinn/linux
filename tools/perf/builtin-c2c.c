@@ -1193,16 +1193,18 @@ percent_store_refs_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
     double per;
 
-    /* For child symbols, scope denominator to related cachelines (siblings under parent) */
+    /* For child symbols, scope denominator to all siblings under parent */
     if (he->parent_he) {
-        struct c2c_hist_entry *parent_c2c_he = container_of(he->parent_he, struct c2c_hist_entry, he);
-        struct related_symbol *rel_sym;
+        struct rb_node *nd;
         /* Use authoritative total stores: stats.store */
         uint64_t numer = (uint64_t)c2c_he->stats.store;
         uint64_t denom = 0;
 
-        list_for_each_entry(rel_sym, &parent_c2c_he->related_symbols, list) {
-            denom += (uint64_t)rel_sym->stats.store;
+        /* Iterate over all siblings (children of the same parent) */
+        for (nd = rb_first_cached(&he->parent_he->hroot_out); nd; nd = rb_next(nd)) {
+            struct hist_entry *sibling_he = rb_entry(nd, struct hist_entry, rb_node);
+            struct c2c_hist_entry *sibling_c2c_he = container_of(sibling_he, struct c2c_hist_entry, he);
+            denom += (uint64_t)sibling_c2c_he->stats.store;
         }
         per = denom ? (100.0 * (double)numer / (double)denom) : 0.0;
     } else {
@@ -1246,7 +1248,32 @@ static int
 percent_store_refs_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
                          struct hist_entry *he)
 {
-    return percent_color(fmt, hpp, he, percent_store_refs);
+    struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
+    int width = c2c_width(fmt, hpp, he->hists);
+    double per;
+    
+    /* For child symbols, use sibling-scoped percentage calculation */
+    if (he->parent_he) {
+        struct rb_node *nd;
+        uint64_t numer = (uint64_t)c2c_he->stats.store;
+        uint64_t denom = 0;
+        
+        /* Iterate over all siblings (children of the same parent) */
+        for (nd = rb_first_cached(&he->parent_he->hroot_out); nd; nd = rb_next(nd)) {
+            struct hist_entry *sibling_he = rb_entry(nd, struct hist_entry, rb_node);
+            struct c2c_hist_entry *sibling_c2c_he = container_of(sibling_he, struct c2c_hist_entry, he);
+            denom += (uint64_t)sibling_c2c_he->stats.store;
+        }
+        per = denom ? (100.0 * (double)numer / (double)denom) : 0.0;
+    } else {
+        per = percent_store_refs(c2c_he);
+    }
+    
+#ifdef HAVE_SLANG_SUPPORT
+    if (use_browser)
+        return __hpp__slsmg_color_printf(hpp, "%*.2f%%", width - 1, per);
+#endif
+    return hpp_color_scnprintf(hpp, "%*.2f%%", width - 1, per);
 }
 
 static int64_t
@@ -1259,13 +1286,15 @@ percent_store_refs_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
     
     /* For child symbols, use sibling-scoped percentage calculation */
     if (left->parent_he) {
-        struct c2c_hist_entry *parent_c2c_he = container_of(left->parent_he, struct c2c_hist_entry, he);
-        struct related_symbol *rel_sym;
+        struct rb_node *nd;
         uint64_t numer = (uint64_t)c2c_left->stats.store;
         uint64_t denom = 0;
         
-        list_for_each_entry(rel_sym, &parent_c2c_he->related_symbols, list) {
-            denom += (uint64_t)rel_sym->stats.store;
+        /* Iterate over all siblings (children of the same parent) */
+        for (nd = rb_first_cached(&left->parent_he->hroot_out); nd; nd = rb_next(nd)) {
+            struct hist_entry *sibling_he = rb_entry(nd, struct hist_entry, rb_node);
+            struct c2c_hist_entry *sibling_c2c_he = container_of(sibling_he, struct c2c_hist_entry, he);
+            denom += (uint64_t)sibling_c2c_he->stats.store;
         }
         per_left = denom ? (100.0 * (double)numer / (double)denom) : 0.0;
     } else {
@@ -1273,13 +1302,15 @@ percent_store_refs_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
     }
     
     if (right->parent_he) {
-        struct c2c_hist_entry *parent_c2c_he = container_of(right->parent_he, struct c2c_hist_entry, he);
-        struct related_symbol *rel_sym;
+        struct rb_node *nd;
         uint64_t numer = (uint64_t)c2c_right->stats.store;
         uint64_t denom = 0;
         
-        list_for_each_entry(rel_sym, &parent_c2c_he->related_symbols, list) {
-            denom += (uint64_t)rel_sym->stats.store;
+        /* Iterate over all siblings (children of the same parent) */
+        for (nd = rb_first_cached(&right->parent_he->hroot_out); nd; nd = rb_next(nd)) {
+            struct hist_entry *sibling_he = rb_entry(nd, struct hist_entry, rb_node);
+            struct c2c_hist_entry *sibling_c2c_he = container_of(sibling_he, struct c2c_hist_entry, he);
+            denom += (uint64_t)sibling_c2c_he->stats.store;
         }
         per_right = denom ? (100.0 * (double)numer / (double)denom) : 0.0;
     } else {
