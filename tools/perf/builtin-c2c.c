@@ -3166,11 +3166,12 @@ static void perf_c2c__hists_fprintf(FILE *out, struct perf_session *session)
 /*
  * Create child hist_entry objects for related symbols
  * This enables the hierarchical display in the TUI browser
+ * Children are inserted sorted by Store Refs (stats.store) descending
  */
 static void populate_symbol_children(struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
-	struct related_symbol *rel_sym;
+    struct related_symbol *rel_sym;
 	struct rb_root_cached *root;
 	struct rb_node **p;
 	struct rb_node *parent = NULL;
@@ -3214,17 +3215,54 @@ static void populate_symbol_children(struct hist_entry *he)
 	c2c_debug2("Creating children for symbol: %s (he=%p, hists=%p)\n",
 		   he->ms.sym ? he->ms.sym->name : "[unknown]", he, he->hists);
 
-	/* Create child entries for each related symbol */
-	list_for_each_entry(rel_sym, &c2c_he->related_symbols, list) {
-		struct c2c_hist_entry *child_c2c_he;
-		struct hist_entry *child_he;
+    /* Create child entries sorted by Store Refs (stats.store) descending */
+    {
+        int num_rel = 0, idx = 0, i;
+        struct related_symbol **sorted = NULL;
+
+        /* Count related symbols */
+        list_for_each_entry(rel_sym, &c2c_he->related_symbols, list)
+            num_rel++;
+
+        if (num_rel == 0)
+            return;
+
+        sorted = calloc(num_rel, sizeof(*sorted));
+        if (!sorted)
+            return;
+
+        /* Fill array */
+        list_for_each_entry(rel_sym, &c2c_he->related_symbols, list)
+            sorted[idx++] = rel_sym;
+
+        /* Simple selection sort by stats.store descending to avoid qsort dependency nuances */
+        for (i = 0; i < num_rel - 1; i++) {
+            int max_j = i, j;
+            for (j = i + 1; j < num_rel; j++) {
+                uint64_t a = (uint64_t)sorted[max_j]->stats.store;
+                uint64_t b = (uint64_t)sorted[j]->stats.store;
+                if (b > a)
+                    max_j = j;
+            }
+            if (max_j != i) {
+                struct related_symbol *tmp = sorted[i];
+                sorted[i] = sorted[max_j];
+                sorted[max_j] = tmp;
+            }
+        }
+
+        /* Emit children in sorted order */
+        for (i = 0; i < num_rel; i++) {
+            struct c2c_hist_entry *child_c2c_he;
+            struct hist_entry *child_he;
+            rel_sym = sorted[i];
 
 		if (!rel_sym || !rel_sym->sym) {
 					c2c_debug1("populate_symbol_children: invalid related_symbol\n");
 			continue;
-		}
+        }
 
-		/* Allocate child hist_entry - simplified version for symbol children */
+        /* Allocate child hist_entry - simplified version for symbol children */
 		child_c2c_he = zalloc(sizeof(*child_c2c_he));
 		if (!child_c2c_he) {
 					c2c_debug1("populate_symbol_children: failed to allocate child\n");
@@ -3312,9 +3350,12 @@ static void populate_symbol_children(struct hist_entry *he)
 		rb_link_node(&child_he->rb_node, parent, p);
 		rb_insert_color_cached(&child_he->rb_node, root, leftmost);
 		
-		count++;
-		c2c_debug3("  Created child %d: %s\n", count, rel_sym->sym->name);
-	}
+        count++;
+        c2c_debug3("  Created child %d: %s\n", count, rel_sym->sym->name);
+        }
+
+        free(sorted);
+    }
 
 	c2c_debug2("  Total children created: %d\n", count);
 }
