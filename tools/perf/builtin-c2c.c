@@ -711,6 +711,11 @@ iaddr_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	char buf[20];
 
+	/* In symbol view, hide Code address for cacheline entries (depth 2) */
+	if (he->depth == 2 && he->parent_he && he->parent_he->parent_he) {
+		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+	}
+
 	if (he->mem_info)
 		addr = mem_info__iaddr(he->mem_info)->addr;
 
@@ -801,7 +806,7 @@ STAT_FN(tot_peer)
 STAT_FN(store)
 STAT_FN(st_l1hit)
 STAT_FN(st_l1miss)
-STAT_FN(st_na)
+STAT_FN_CMP(st_na)
 STAT_FN(ld_fbhit)
 STAT_FN(ld_l1hit)
 STAT_FN(ld_l2hit)
@@ -1051,6 +1056,28 @@ PERCENT_FN(lcl_peer)
 PERCENT_FN(st_l1miss)
 PERCENT_FN(st_na)
 
+// Custom st_na_entry function to handle different display formats based on hierarchy depth
+static int
+st_na_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+	    struct hist_entry *he)
+{
+	struct c2c_hist_entry *c2c_he;
+	int width = c2c_width(fmt, hpp, he->hists);
+	
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	
+	// Check if this is a cacheline level entry (has ms.sym and parent_he)
+	if (he->ms.sym && he->parent_he && he->parent_he->ms.sym) {
+		// For cacheline level, show percentage format like in cacheline view
+		double per = PERCENT(he, st_na);
+		char buf[10];
+		return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
+	}
+	
+	// For other levels, show raw count
+	return scnprintf(hpp->buf, hpp->size, "%*u", width, c2c_he->stats.st_na);
+}
+
 static int
 percent_rmt_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		       struct hist_entry *he)
@@ -1193,6 +1220,11 @@ percent_store_refs_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
     double per;
 
+	/* In symbol view, hide Store Refs for parent symbols (depth 0) */
+	if (!he->parent_he) {
+		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+	}
+
     /* For child symbols, scope denominator to all siblings under parent */
     if (he->parent_he) {
         struct rb_node *nd;
@@ -1231,6 +1263,11 @@ total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     uint64_t total = (uint64_t)c2c_he->stats.store;
     int width = c2c_width(fmt, hpp, he->hists);
 
+	/* In symbol view, hide Stores for parent symbols (depth 0) */
+	if (!he->parent_he) {
+		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+	}
+
     if (he->parent_he) {
         char out[32];
         char num[24];
@@ -1252,6 +1289,11 @@ percent_store_refs_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     int width = c2c_width(fmt, hpp, he->hists);
     double per;
     
+	/* In symbol view, hide Store Refs for parent symbols (depth 0) */
+	if (!he->parent_he) {
+		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+	}
+
     /* For child symbols, use sibling-scoped percentage calculation */
     if (he->parent_he) {
         struct rb_node *nd;
@@ -1945,6 +1987,35 @@ static struct c2c_dimension dim_total_stores = {
     .width      = 10,
 };
 
+/* Cacheline entry for symbol view */
+static int
+cacheline_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+                       struct hist_entry *he)
+{
+    uint64_t addr = 0;
+    int width = c2c_width(fmt, hpp, he->hists);
+    char buf[20];
+
+    /* Only display for cacheline entries - these are leaf nodes under related symbols */
+    if (he->depth < 2 || !he->leaf) {
+        return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+    }
+
+    if (he->mem_info)
+        addr = cl_address(mem_info__daddr(he->mem_info)->addr, chk_double_cl);
+
+    return scnprintf(hpp->buf, hpp->size, "%*s", width, HEX_STR(buf, addr));
+}
+
+/* New dimension: Cacheline column for symbol view */
+static struct c2c_dimension dim_cacheline_symbol = {
+    .header     = HEADER_LOW("Cacheline"),
+    .name       = "cacheline_symbol",
+    .cmp        = dcacheline_cmp,
+    .entry      = cacheline_symbol_entry,
+    .width      = 18,
+};
+
 static struct c2c_dimension dim_dram_lcl = {
 	.header		= HEADER_SPAN("--- Load Dram ----", "Lcl", 1),
 	.name		= "dram_lcl",
@@ -1984,6 +2055,9 @@ symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	struct c2c_dimension *dim = c2c_fmt->dim;
 	size_t len = fmt->user_len;
 	const char *symname = he->ms.sym ? he->ms.sym->name : "[unknown]";
+	int width = c2c_width(fmt, hpp, he->hists);
+	char buf[512];
+	int indent = 0;
 
 	if (!len) {
 		len = hists__col_len(he->hists, dim->se->se_width_idx);
@@ -1991,14 +2065,48 @@ symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 			len = symbol_width(he->hists, dim->se);
 	}
 
-    /* For child entries (related symbols), add indentation */
-    if (he->parent_he) {
-        /* Indent child symbols by 4 spaces */
-        return scnprintf(hpp->buf, hpp->size, "    %s", symname);
-    }
+	/* In symbol view, hide Symbol for cacheline entries (depth 2) */
+	if (he->depth == 2 && he->parent_he && he->parent_he->parent_he) {
+		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+	}
 
-	/* For top-level entries, let TUI browser handle the folding sign */
-	return scnprintf(hpp->buf, hpp->size, "%s", symname);
+	/* Calculate indentation based on hierarchy depth */
+	if (he->parent_he) {
+		indent = he->depth * 2;  /* 2 spaces per level */
+		if (indent > 20) indent = 20;  /* Max indent */
+	}
+
+	/* Cacheline grandchildren: no symbol, show cacheline address */
+	if (!he->ms.sym && he->mem_info && he->parent_he && he->parent_he->parent_he) {
+		u64 cl = 0;
+		if (mem_info__daddr(he->mem_info))
+			cl = cl_address(mem_info__daddr(he->mem_info)->addr, chk_double_cl);
+		snprintf(buf, sizeof(buf), "%*s0x%lx", indent, "", cl);
+		return scnprintf(hpp->buf, hpp->size, "%-*s", width, buf);
+	}
+
+	/* Build the symbol string with proper indentation and folding indicator */
+	if (he->parent_he) {
+		/* Child entries */
+		if (he->has_children) {
+			snprintf(buf, sizeof(buf), "%*s%c %s", 
+				 indent > 0 ? indent - 2 : 0, "",
+				 he->unfolded ? '-' : '+', symname);
+		} else {
+			snprintf(buf, sizeof(buf), "%*s  %s", 
+				 indent > 0 ? indent - 2 : 0, "", symname);
+		}
+	} else {
+		/* Top-level entries */
+		if (he->has_children) {
+			snprintf(buf, sizeof(buf), "%c %s", 
+				 he->unfolded ? '-' : '+', symname);
+		} else {
+			snprintf(buf, sizeof(buf), "  %s", symname);
+		}
+	}
+
+	return scnprintf(hpp->buf, hpp->size, "%-*s", width, buf);
 }
 
 static struct c2c_dimension dim_symbol = {
@@ -2196,6 +2304,11 @@ cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load, symbol_cycles;
 	uint64_t total_cycles;
 	double percent;
+
+	/* In symbol view, hide Cycles Percent for child symbols and cachelines */
+	if (he->parent_he) {
+		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+	}
 
     c2c_he = container_of(he, struct c2c_hist_entry, he);
     cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
@@ -2425,6 +2538,7 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_percent_stores_l1miss,
 	&dim_percent_stores_na,
 	&dim_total_stores,
+	&dim_cacheline_symbol,
 	&dim_dram_lcl,
 	&dim_dram_rmt,
 	&dim_pid,
@@ -3215,7 +3329,7 @@ static void populate_symbol_children(struct hist_entry *he)
 	c2c_debug2("Creating children for symbol: %s (he=%p, hists=%p)\n",
 		   he->ms.sym ? he->ms.sym->name : "[unknown]", he, he->hists);
 
-    /* Create child entries sorted by Store Refs (stats.store) descending */
+	/* Create child entries sorted by Store Refs (stats.store) descending */
     {
         int num_rel = 0, idx = 0, i;
         struct related_symbol **sorted = NULL;
@@ -3258,14 +3372,12 @@ static void populate_symbol_children(struct hist_entry *he)
             rel_sym = sorted[i];
 
 		if (!rel_sym || !rel_sym->sym) {
-					c2c_debug1("populate_symbol_children: invalid related_symbol\n");
 			continue;
         }
 
         /* Allocate child hist_entry - simplified version for symbol children */
 		child_c2c_he = zalloc(sizeof(*child_c2c_he));
 		if (!child_c2c_he) {
-					c2c_debug1("populate_symbol_children: failed to allocate child\n");
 			continue;
 		}
 		
@@ -3297,12 +3409,13 @@ static void populate_symbol_children(struct hist_entry *he)
 		/* Set hierarchy fields */
 		child_he->parent_he = he;
 		child_he->depth = he->depth + 1;
-		child_he->leaf = true;
+		child_he->leaf = false; /* it can have grandchildren (cachelines) */
 		/* In symbol view, all entries should use symbol_hists */
 		child_he->hists = &c2c.symbol_hists.hists;
 		child_he->filtered = false;  /* Make sure it's not filtered out */
 		child_he->unfolded = false;
-		child_he->has_children = false;
+		child_he->has_children = false; /* Will be set to true only if grandchildren are added */
+		child_he->has_no_entry = false;
 		child_he->nr_rows = 0;
 		child_he->row_offset = 0;
 
@@ -3330,14 +3443,153 @@ static void populate_symbol_children(struct hist_entry *he)
 		
 		/* Initialize pairs list */
 		INIT_LIST_HEAD(&child_he->pairs.node);
+		
+		/* Initialize hierarchy pointers */
+		child_he->hpp_list = &c2c.symbol_hists.list;
 
         /* Copy c2c stats - this is what c2c columns use */
         memcpy(&child_c2c_he->stats, &rel_sym->stats, sizeof(rel_sym->stats));
         memcpy(&child_c2c_he->cstats, &rel_sym->cstats, sizeof(rel_sym->cstats));
 		init_c2c_he_related_symbols(child_c2c_he);
 		
-		/* Child symbol entries don't need hists - browse_symbol_cachelines uses global c2c.hists */
+		/* Build cacheline grandchildren under each related symbol child */
 		child_c2c_he->hists = NULL;
+
+		/* Populate grandchildren: cachelines where both parent symbol (he) and this related symbol accessed */
+		{
+			struct rb_node *nd_cl = rb_first_cached(&c2c.hists.hists.entries);
+			struct rb_root_cached *groot = &child_he->hroot_out;
+			/* temp array to sort grandchildren by Store Refs */
+			struct grand_item { struct c2c_hist_entry *grand_c2c; struct hist_entry *grand_he; u64 stores; } *items = NULL;
+			int items_cnt = 0, items_cap = 0;
+			while (nd_cl) {
+				struct hist_entry *he_cl = rb_entry(nd_cl, struct hist_entry, rb_node);
+				struct c2c_hist_entry *c2c_he_cl = container_of(he_cl, struct c2c_hist_entry, he);
+				bool found_parent = false, found_child = false;
+				if (c2c_he_cl->hists && c2c_he_cl->hists->hists.entries.rb_root.rb_node) {
+					struct rb_node *nd_d = rb_first_cached(&c2c_he_cl->hists->hists.entries);
+					while (nd_d && (!found_parent || !found_child)) {
+						struct hist_entry *he_d = rb_entry(nd_d, struct hist_entry, rb_node);
+						u64 iaddr_d = he_d->mem_info ? mem_info__iaddr(he_d->mem_info)->addr : 0;
+						if (he_d->ms.sym == he->ms.sym) {
+							u64 pi = he->mem_info ? mem_info__iaddr(he->mem_info)->addr : (he->ms.sym ? he->ms.sym->start : 0);
+							if (iaddr_d == pi)
+								found_parent = true;
+						} else if (he_d->ms.sym == rel_sym->sym && iaddr_d == rel_sym->iaddr) {
+							found_child = true;
+						}
+						nd_d = rb_next(&he_d->rb_node);
+					}
+				}
+				if (found_parent && found_child) {
+					struct c2c_hist_entry *grand_c2c = zalloc(sizeof(*grand_c2c));
+					struct hist_entry *grand_he;
+					u64 child_stores = 0;
+					if (!grand_c2c)
+						break;
+					init_c2c_he_related_symbols(grand_c2c);
+					grand_he = &grand_c2c->he;
+					/* copy ms from cacheline entry, but clear sym to print cacheline address */
+					memcpy(&grand_he->ms, &he_cl->ms, sizeof(struct map_symbol));
+					grand_he->ms.sym = NULL;
+					grand_he->mem_info = mem_info__get(he_cl->mem_info);
+					grand_he->thread = he_cl->thread;
+					grand_he->cpumode = he_cl->cpumode;
+					grand_he->cpu = he_cl->cpu;
+					grand_he->socket = he_cl->socket;
+					grand_he->parent_he = child_he;
+					grand_he->depth = child_he->depth + 1;
+					grand_he->leaf = true;
+					grand_he->hists = &c2c.symbol_hists.hists;
+					grand_he->filtered = false;
+					grand_he->unfolded = false;
+					grand_he->has_children = false;
+					grand_he->nr_rows = 0;
+					grand_he->row_offset = 0;
+					memset(&grand_he->stat, 0, sizeof(grand_he->stat));
+					grand_he->hroot_in = RB_ROOT_CACHED;
+					grand_he->hroot_out = RB_ROOT_CACHED;
+					INIT_LIST_HEAD(&grand_he->pairs.node);
+					
+					/* Initialize hierarchy pointers for grandchild */
+					grand_he->hpp_list = &c2c.symbol_hists.list;
+					/* compute child-specific stats for this cacheline */
+					{
+						struct c2c_stats pair_stats = { .nr_entries = 0 };
+						struct compute_stats pair_cstats = {};
+						if (c2c_he_cl->hists && c2c_he_cl->hists->hists.entries.rb_root.rb_node) {
+							struct rb_node *nd2 = rb_first_cached(&c2c_he_cl->hists->hists.entries);
+							while (nd2) {
+								struct hist_entry *he_d2 = rb_entry(nd2, struct hist_entry, rb_node);
+								struct c2c_hist_entry *c2c_he_d2 = container_of(he_d2, struct c2c_hist_entry, he);
+								u64 iaddr2 = he_d2->mem_info ? mem_info__iaddr(he_d2->mem_info)->addr : 0;
+								if (he_d2->ms.sym == rel_sym->sym && iaddr2 == rel_sym->iaddr) {
+									c2c_add_stats(&pair_stats, &c2c_he_d2->stats);
+									c2c_add_cstats(&pair_cstats, &c2c_he_d2->cstats);
+								}
+								nd2 = rb_next(&he_d2->rb_node);
+							}
+						}
+						memcpy(&grand_c2c->stats, &pair_stats, sizeof(grand_c2c->stats));
+						memcpy(&grand_c2c->cstats, &pair_cstats, sizeof(grand_c2c->cstats));
+						child_stores = pair_stats.store;
+					}
+					/* stats for columns alignment */
+					grand_he->stat.nr_events = grand_c2c->stats.lcl_hitm + grand_c2c->stats.rmt_hitm +
+								grand_c2c->stats.lcl_peer + grand_c2c->stats.rmt_peer;
+					grand_he->stat.period = grand_he->stat.nr_events;
+					grand_he->stat.weight1 = grand_c2c->stats.rmt_hitm + grand_c2c->stats.lcl_hitm;
+
+					/* Initialize stat_acc for grandchild if needed */
+					if (symbol_conf.cumulate_callchain) {
+						grand_he->stat_acc = calloc(1, sizeof(struct he_stat));
+						if (grand_he->stat_acc)
+							memcpy(grand_he->stat_acc, &grand_he->stat, sizeof(struct he_stat));
+					}
+
+					/* push into temp array */
+					if (items_cnt == items_cap) {
+						int new_cap = items_cap ? items_cap * 2 : 8;
+						struct grand_item *ni = realloc(items, new_cap * sizeof(*items));
+						if (!ni) { free(grand_c2c); break; }
+						items = ni; items_cap = new_cap;
+					}
+					items[items_cnt].grand_c2c = grand_c2c;
+					items[items_cnt].grand_he = grand_he;
+					items[items_cnt].stores = child_stores;
+					items_cnt++;
+				}
+				nd_cl = rb_next(nd_cl);
+			}
+			/* sort by stores desc (simple selection sort) */
+			for (int a = 0; a < items_cnt - 1; a++) {
+				int maxj = a;
+				for (int b = a + 1; b < items_cnt; b++)
+					if (items[b].stores > items[maxj].stores)
+						maxj = b;
+				if (maxj != a) {
+					struct grand_item tmp = items[a];
+					items[a] = items[maxj];
+					items[maxj] = tmp;
+				}
+			}
+			/* insert in order */
+			for (int a = 0; a < items_cnt; a++) {
+				p = &groot->rb_root.rb_node;
+				parent = NULL;
+				leftmost = true;
+				while (*p != NULL) { parent = *p; p = &parent->rb_right; leftmost = false; }
+				rb_link_node(&items[a].grand_he->rb_node, parent, p);
+				rb_insert_color_cached(&items[a].grand_he->rb_node, groot, leftmost);
+			}
+			/* mark child has_children only if any grandchildren were added */
+			child_he->has_children = items_cnt > 0;
+			if (items_cnt > 0) {
+				/* Update nr_rows to include grandchildren count */
+				child_he->nr_rows = items_cnt;
+			}
+			free(items);
+		}
 
 		/* Simple insertion - always insert on the right (avoid complex sorting for now) */
 		p = &root->rb_root.rb_node;
@@ -3358,6 +3610,15 @@ static void populate_symbol_children(struct hist_entry *he)
     }
 
 	c2c_debug2("  Total children created: %d\n", count);
+	
+	/* Update parent's nr_rows to include all children */
+	if (count > 0) {
+		he->nr_rows = count;
+		he->has_children = true;
+	} else {
+		he->nr_rows = 0;
+		he->has_children = false;
+	}
 }
 
 /*
@@ -3693,7 +3954,7 @@ static int build_symbol_hists(void)
     //    "cycles_percent,percent_store_refs,iaddr,symbol,cycles_total,stores_l1hit,latency_rmt_hitm,latency_lcl_hitm,latency_load,tot_recs,cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,cycles_rmt_hitm,cycles_lcl_hitm,cycles_load",
     //    "cycles_percent");
     ret = c2c_hists__reinit(&c2c.symbol_hists,
-        "cycles_percent,percent_store_refs,total_stores,iaddr,symbol",
+        "cycles_percent,percent_store_refs,total_stores,iaddr,symbol,cacheline_symbol",
         "cycles_percent");
 	if (ret)
 		return ret;
@@ -3792,7 +4053,7 @@ static int build_symbol_hists(void)
 			if (mi_display)
 				mem_info__put(mi_display);
 
-			if (he_sym) {
+            if (he_sym) {
 				c2c_he_sym = container_of(he_sym, struct c2c_hist_entry, he);
 
 				/* Copy aggregated stats to the symbol entry */
@@ -3800,7 +4061,8 @@ static int build_symbol_hists(void)
 				c2c_he_sym->cstats = entry->cstats;
 				c2c_add_stats(&c2c.symbol_hists.stats, &entry->stats);
 
-				hists__inc_nr_samples(&c2c.symbol_hists.hists, he_sym->filtered);
+                hists__inc_nr_samples(&c2c.symbol_hists.hists, he_sym->filtered);
+                he_sym->hpp_list = &c2c.symbol_hists.list;
 				
 				if (verbose > 2)
 					printf("Aggregated symbol %s at 0x%lx: tot_hitm=%u, lcl_hitm=%u, rmt_hitm=%u\n",
@@ -3826,6 +4088,13 @@ static int build_symbol_hists(void)
 	/* Resort symbol hists */
 	hists__collapse_resort(&c2c.symbol_hists.hists, NULL);
 	hists__output_resort(&c2c.symbol_hists.hists, NULL);
+
+	/* Enable hierarchy support for symbol view to allow multi-level display */
+	c2c.symbol_hists.hists.symbol_filter_str = NULL;
+	c2c.symbol_hists.hists.socket_filter = -1;
+	
+	/* Initialize the hist browser fields needed for hierarchy */
+	c2c.symbol_hists.hists.nr_hpp_node = 0;
 
 	/* Build symbol associations after hists are complete */
 	build_symbol_associations();
@@ -4008,18 +4277,6 @@ static int perf_c2c_browser__title(struct hist_browser *browser,
 }
 
 /* Custom title for pair-filtered Shared Data Cache Line Table */
-static char symbol_pair_title_info[512];
-static int perf_c2c_symbol_pair_browser__title(struct hist_browser *browser,
-                                               char *bf, size_t size)
-{
-    scnprintf(bf, size,
-              "Shared Data Cache Line Table - %s     (%lu entries, sorted on %s)",
-              symbol_pair_title_info,
-              browser->nr_non_filtered_entries,
-              display_str[c2c.display]);
-    return 0;
-}
-
 static int perf_c2c_symbol_browser__title(struct hist_browser *browser,
 					  char *bf, size_t size)
 {
@@ -4047,249 +4304,204 @@ perf_c2c_browser__new(struct hists *hists)
 
 
 /*
+ * Browse a specific cacheline showing only entries for the parent and child symbols
+ */
+static int perf_c2c__browse_symbol_pair_cacheline(struct hist_entry *he_grandchild)
+{
+    struct hist_entry *he_child, *he_parent;
+    struct c2c_hist_entry *c2c_he_cl;
+    struct c2c_hists *c2c_hists_cl;
+    struct hist_browser *cl_browser;
+    struct c2c_cacheline_browser *c2c_cl_browser;
+    struct rb_node *nd;
+    u64 cl_addr = 0;
+    int key = -1;
+    static const char help[] =
+        " s             Toggle full length of symbol and source line columns \n"
+        " n             Toggle Node details info \n"
+        " q             Return back to symbol list \n";
+
+    if (!he_grandchild || !he_grandchild->parent_he || !he_grandchild->parent_he->parent_he)
+        return 0;
+
+    he_child = he_grandchild->parent_he;
+    he_parent = he_child->parent_he;
+
+    /* Get the cacheline address from the grandchild */
+    if (he_grandchild->mem_info && mem_info__daddr(he_grandchild->mem_info))
+        cl_addr = cl_address(mem_info__daddr(he_grandchild->mem_info)->addr, chk_double_cl);
+    else
+        return 0;
+
+    /* Find the cacheline entry in the main c2c.hists */
+    nd = rb_first_cached(&c2c.hists.hists.entries);
+    while (nd) {
+        struct hist_entry *he_cl = rb_entry(nd, struct hist_entry, rb_node);
+        if (he_cl->mem_info && mem_info__daddr(he_cl->mem_info)) {
+            u64 this_cl = cl_address(mem_info__daddr(he_cl->mem_info)->addr, chk_double_cl);
+            if (this_cl == cl_addr) {
+                /* Found the cacheline, now filter its details */
+                c2c_he_cl = container_of(he_cl, struct c2c_hist_entry, he);
+                c2c_hists_cl = c2c_he_cl->hists;
+                
+                if (!c2c_hists_cl)
+                    return 0;
+
+                /* Create a browser for the filtered cacheline */
+                c2c_cl_browser = c2c_cacheline_browser__new(&c2c_hists_cl->hists, he_cl);
+                if (c2c_cl_browser == NULL)
+                    return -1;
+
+                cl_browser = &c2c_cl_browser->hb;
+
+
+                /* Apply filter to show only parent and child symbol entries and sort by offset */
+                {
+                    struct hist_entry **entries = NULL;
+                    int nr_entries = 0, capacity = 0;
+                    struct rb_node *nd_detail;
+                    int i;
+                    
+                    /* First pass: collect matching entries */
+                    nd_detail = rb_first_cached(&c2c_hists_cl->hists.entries);
+                    while (nd_detail) {
+                        struct hist_entry *he_detail = rb_entry(nd_detail, struct hist_entry, rb_node);
+                        bool keep = false;
+                        
+                        /* Keep only entries matching parent or child symbols */
+                        if (he_detail->ms.sym) {
+                            /* Check if it matches parent symbol */
+                            if (he_parent->ms.sym && he_detail->ms.sym == he_parent->ms.sym) {
+                                if (he_parent->mem_info && he_detail->mem_info) {
+                                    u64 parent_iaddr = mem_info__iaddr(he_parent->mem_info)->addr;
+                                    u64 detail_iaddr = mem_info__iaddr(he_detail->mem_info)->addr;
+                                    if (parent_iaddr == detail_iaddr)
+                                        keep = true;
+                                }
+                            }
+                            
+                            /* Check if it matches child symbol */
+                            if (!keep && he_child->ms.sym && he_detail->ms.sym == he_child->ms.sym) {
+                                if (he_child->mem_info && he_detail->mem_info) {
+                                    u64 child_iaddr = mem_info__iaddr(he_child->mem_info)->addr;
+                                    u64 detail_iaddr = mem_info__iaddr(he_detail->mem_info)->addr;
+                                    if (child_iaddr == detail_iaddr)
+                                        keep = true;
+                                }
+                            }
+                        }
+                        
+                        if (keep) {
+                            /* Add to array for sorting */
+                            if (nr_entries >= capacity) {
+                                capacity = capacity ? capacity * 2 : 16;
+                                entries = realloc(entries, capacity * sizeof(*entries));
+                                if (!entries)
+                                    break;
+                            }
+                            entries[nr_entries++] = he_detail;
+                        }
+                        
+                        he_detail->filtered = !keep;
+                        nd_detail = rb_next(&he_detail->rb_node);
+                    }
+                    
+                    /* Sort entries by offset */
+                    if (entries && nr_entries > 1) {
+                        for (i = 0; i < nr_entries - 1; i++) {
+                            int j, min_idx = i;
+                            for (j = i + 1; j < nr_entries; j++) {
+                                u64 off_i = entries[min_idx]->mem_info ? 
+                                    (mem_info__daddr(entries[min_idx]->mem_info)->al_addr & 0xff) : 0;
+                                u64 off_j = entries[j]->mem_info ? 
+                                    (mem_info__daddr(entries[j]->mem_info)->al_addr & 0xff) : 0;
+                                if (off_j < off_i)
+                                    min_idx = j;
+                            }
+                            if (min_idx != i) {
+                                struct hist_entry *tmp = entries[i];
+                                entries[i] = entries[min_idx];
+                                entries[min_idx] = tmp;
+                            }
+                        }
+                        
+                        /* Rebuild the tree in sorted order */
+                        c2c_hists_cl->hists.entries = RB_ROOT_CACHED;
+                        for (i = 0; i < nr_entries; i++) {
+                            struct rb_node **p = &c2c_hists_cl->hists.entries.rb_root.rb_node;
+                            struct rb_node *parent = NULL;
+                            bool leftmost = true;
+                            
+                            while (*p != NULL) {
+                                parent = *p;
+                                p = &parent->rb_right;
+                                leftmost = false;
+                            }
+                            
+                            rb_link_node(&entries[i]->rb_node, parent, p);
+                            rb_insert_color_cached(&entries[i]->rb_node, &c2c_hists_cl->hists.entries, leftmost);
+                        }
+                    }
+                    
+                    free(entries);
+                }
+
+                /* Update browser title */
+                cl_browser->title = perf_c2c_browser__title;
+
+                /* Reset tty and run browser */
+                SLang_reset_tty();
+                SLang_init_tty(0, 0, 0);
+                c2c_browser__update_nr_entries(cl_browser);
+
+                while (1) {
+                    key = hist_browser__run(cl_browser, "? - help", true, 0);
+
+                    switch (key) {
+                    case 's':
+                        c2c.symbol_full = !c2c.symbol_full;
+                        break;
+                    case 'n':
+                        c2c.node_info = (c2c.node_info + 1) % 3;
+                        setup_nodes_header();
+                        break;
+                    case 'q':
+                        goto out;
+                    case '?':
+                        ui_browser__help_window(&cl_browser->b, help);
+                        break;
+                    default:
+                        break;
+                    }
+                }
+
+out:
+                /* Clear filters before returning */
+                {
+                    struct rb_node *nd_detail = rb_first_cached(&c2c_hists_cl->hists.entries);
+                    while (nd_detail) {
+                        struct hist_entry *he_detail = rb_entry(nd_detail, struct hist_entry, rb_node);
+                        he_detail->filtered = false;
+                        nd_detail = rb_next(&he_detail->rb_node);
+                    }
+                }
+                
+                free(c2c_cl_browser);
+                return 0;
+            }
+        }
+        nd = rb_next(&he_cl->rb_node);
+    }
+
+    return 0;
+}
+
+/*
  * Browse a Shared Data Cache Line Table filtered to cachelines shared by
  * the selected related symbol (child) and its parent symbol. This uses the
  * standard cacheline columns and title, and supports 'd' to open cacheline details.
  */
-static int perf_c2c__browse_symbol_pair_cachelines(struct hist_entry *he_child)
-{
-    struct hist_entry *he_parent;
-    struct symbol *child_sym, *parent_sym;
-    uint64_t child_iaddr = 0, parent_iaddr = 0;
-    struct c2c_hists *filtered;
-    struct hist_browser *browser;
-    struct c2c_cacheline_browser *cl_browser;
-    struct rb_node *next;
-    int key = -1;
-    const char *output_str, *sort_str = NULL;
-    static const char help[] =
-        " d             Display details (cacheline details for selected item) \n"
-        " n             Toggle Node details info \n"
-        " s             Toggle full length of symbol and source line columns \n"
-        " q             Return back to symbol list \n";
 
-    if (!he_child || !he_child->parent_he)
-        return 0;
-
-    he_parent = he_child->parent_he;
-    child_sym = he_child->ms.sym;
-    parent_sym = he_parent->ms.sym;
-    if (!child_sym || !parent_sym)
-        return 0;
-
-    if (he_child->mem_info)
-        child_iaddr = mem_info__iaddr(he_child->mem_info)->addr;
-    if (he_parent->mem_info)
-        parent_iaddr = mem_info__iaddr(he_parent->mem_info)->addr;
-
-    /* Initialize filtered hists with same behavior as main view */
-    filtered = zalloc(sizeof(*filtered));
-    if (!filtered)
-        return -1;
-
-    if (c2c_hists__init(filtered, "dcacheline", 2) < 0) {
-        free(filtered);
-        return -1;
-    }
-
-    if (c2c.display != DISPLAY_SNP_PEER)
-        output_str = "cl_idx,"
-                     "dcacheline,"
-                     "dcacheline_node,"
-                     "dcacheline_count,"
-                     "percent_costly_snoop,"
-                     "tot_hitm,lcl_hitm,rmt_hitm,"
-                     "tot_recs,"
-                     "tot_loads,"
-                     "tot_stores,"
-                     "stores_l1hit,stores_l1miss,stores_na,"
-                     "ld_fbhit,ld_l1hit,ld_l2hit,"
-                     "ld_lclhit,lcl_hitm,"
-                     "ld_rmthit,rmt_hitm,"
-                     "dram_lcl,dram_rmt";
-    else
-        output_str = "cl_idx,"
-                     "dcacheline,"
-                     "dcacheline_node,"
-                     "dcacheline_count,"
-                     "percent_costly_snoop,"
-                     "tot_peer,lcl_peer,rmt_peer,"
-                     "tot_recs,"
-                     "tot_loads,"
-                     "tot_stores,"
-                     "stores_l1hit,stores_l1miss,stores_na,"
-                     "ld_fbhit,ld_l1hit,ld_l2hit,"
-                     "ld_lclhit,lcl_hitm,"
-                     "ld_rmthit,rmt_hitm,"
-                     "dram_lcl,dram_rmt";
-
-    if (c2c.display == DISPLAY_TOT_HITM)
-        sort_str = "tot_hitm";
-    else if (c2c.display == DISPLAY_LCL_HITM)
-        sort_str = "lcl_hitm";
-    else if (c2c.display == DISPLAY_RMT_HITM)
-        sort_str = "rmt_hitm";
-    else if (c2c.display == DISPLAY_SNP_PEER)
-        sort_str = "tot_peer";
-
-    if (c2c_hists__reinit(filtered, output_str, sort_str) < 0) {
-        hists__delete_entries(&filtered->hists);
-        free(filtered);
-        return -1;
-    }
-
-    /* Iterate all cachelines and pick those accessed by BOTH symbols at the specific iaddrs */
-    next = rb_first_cached(&c2c.hists.hists.entries);
-    while (next) {
-        struct hist_entry *he = rb_entry(next, struct hist_entry, rb_node);
-        struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
-        bool found_child = false, found_parent = false;
-
-        if (!he->mem_info || he->filtered) {
-            next = rb_next(&he->rb_node);
-            continue;
-        }
-
-        if (c2c_he->hists && c2c_he->hists->hists.entries.rb_root.rb_node) {
-            struct rb_node *nd = rb_first_cached(&c2c_he->hists->hists.entries);
-            while (nd && (!found_child || !found_parent)) {
-                struct hist_entry *he_d = rb_entry(nd, struct hist_entry, rb_node);
-                uint64_t iaddr = 0;
-                if (he_d->mem_info)
-                    iaddr = mem_info__iaddr(he_d->mem_info)->addr;
-
-                if (he_d->ms.sym == child_sym && iaddr == child_iaddr)
-                    found_child = true;
-                else if (he_d->ms.sym == parent_sym && iaddr == parent_iaddr)
-					found_parent = true;
-
-                nd = rb_next(&he_d->rb_node);
-            }
-        }
-
-        if (found_child && found_parent) {
-            struct addr_location al;
-            struct perf_sample dummy = {};
-            struct hist_entry *he_new;
-            struct c2c_hist_entry *c2c_he_new;
-
-            addr_location__init(&al);
-            al.thread = he->thread;
-            al.maps = he->ms.maps;
-            al.map = he->ms.map;
-            al.sym = he->ms.sym;
-            al.addr = he->ip;
-            al.cpumode = he->cpumode;
-            al.cpu = he->cpu;
-            al.socket = he->socket;
-
-            dummy.ip = he->ip;
-            dummy.pid = thread__pid(he->thread);
-            dummy.tid = thread__tid(he->thread);
-            dummy.cpu = he->cpu;
-            dummy.period = he->stat.period;
-            dummy.weight = he->stat.weight1;
-
-            /* Retain mem_info so the detail RB tree remains valid across nested views */
-            he_new = hists__add_entry_ops(&filtered->hists, &c2c_entry_ops,
-                                          &al, NULL, NULL, mem_info__get(he->mem_info), NULL,
-                                          &dummy, true);
-            addr_location__exit(&al);
-
-            if (he_new) {
-                c2c_he_new = container_of(he_new, struct c2c_hist_entry, he);
-                /* Compute pair-specific stats for this cacheline: only the child symbol at child_iaddr */
-                {
-                    struct c2c_stats pair_stats = { .nr_entries = 0 };
-                    struct compute_stats pair_cstats = {};
-                    if (c2c_he->hists && c2c_he->hists->hists.entries.rb_root.rb_node) {
-                        struct rb_node *nd2 = rb_first_cached(&c2c_he->hists->hists.entries);
-                        while (nd2) {
-                            struct hist_entry *he_d2 = rb_entry(nd2, struct hist_entry, rb_node);
-                            struct c2c_hist_entry *c2c_he_d2 = container_of(he_d2, struct c2c_hist_entry, he);
-                            uint64_t iaddr2 = he_d2->mem_info ? mem_info__iaddr(he_d2->mem_info)->addr : 0;
-                            if (he_d2->ms.sym == child_sym && iaddr2 == child_iaddr) {
-                                c2c_add_stats(&pair_stats, &c2c_he_d2->stats);
-                                c2c_add_cstats(&pair_cstats, &c2c_he_d2->cstats);
-                            }
-                            nd2 = rb_next(&he_d2->rb_node);
-                        }
-                    }
-                    memcpy(&c2c_he_new->stats, &pair_stats, sizeof(c2c_he_new->stats));
-                    memcpy(&c2c_he_new->cstats, &pair_cstats, sizeof(c2c_he_new->cstats));
-                }
-                /* Do NOT point to original cacheline hists to avoid freeing them on filtered table cleanup.
-                 * The detail browser will locate the original hists by cacheline address when needed. */
-                c2c_he_new->hists = NULL;
-                if (c2c_he->nodestr)
-                    c2c_he_new->nodestr = strdup(c2c_he->nodestr);
-                c2c_add_stats(&filtered->stats, &c2c_he_new->stats);
-                hists__inc_nr_samples(&filtered->hists, he_new->filtered);
-            }
-        }
-
-        next = rb_next(&he->rb_node);
-    }
-
-    /* Resort */
-    hists__collapse_resort(&filtered->hists, NULL);
-    hists__output_resort(&filtered->hists, NULL);
-
-    /* Build custom title info: child and parent with code addresses */
-    if (child_sym && parent_sym) {
-        scnprintf(symbol_pair_title_info, sizeof(symbol_pair_title_info),
-                  "%s@0x%lx (parent: %s@0x%lx)",
-                  child_sym->name, child_iaddr,
-                  parent_sym->name, parent_iaddr);
-    } else {
-        scnprintf(symbol_pair_title_info, sizeof(symbol_pair_title_info),
-                  "Filtered by selected related symbol pair");
-    }
-
-    /* Open browser with custom title */
-    cl_browser = c2c_cacheline_browser__new(&filtered->hists, NULL);
-    if (cl_browser == NULL) {
-        hists__delete_entries(&filtered->hists);
-        free(filtered);
-        return -1;
-    }
-    browser = &cl_browser->hb;
-    browser->title = perf_c2c_symbol_pair_browser__title;
-
-    SLang_reset_tty();
-    SLang_init_tty(0, 0, 0);
-    c2c_browser__update_nr_entries(browser);
-
-    while (1) {
-        key = hist_browser__run(browser, "? - help", true, 0);
-        switch (key) {
-        case 's':
-            c2c.symbol_full = !c2c.symbol_full;
-            break;
-        case 'n':
-            c2c.node_info = (c2c.node_info + 1) % 3;
-            setup_nodes_header();
-            break;
-        case 'd':
-            if (browser->he_selection)
-                perf_c2c__browse_cacheline(browser->he_selection);
-            break;
-        case 'q':
-            goto out;
-        case '?':
-            ui_browser__help_window(&browser->b, help);
-            break;
-        default:
-            break;
-        }
-    }
-
-out:
-    free(cl_browser);
-    hists__delete_entries(&filtered->hists);
-    free(filtered);
-    return 0;
-}
 
 static int perf_c2c__hists_browse(struct hists *hists)
 {
@@ -4323,9 +4535,14 @@ static int perf_c2c__hists_browse(struct hists *hists)
 	if (sym_browser) {
 		sym_browser->title = perf_c2c_symbol_browser__title;
 		sym_browser->c2c_filter = true;
+		/* Enable hierarchy display for symbol view */
+		sym_browser->show_headers = true;
+		sym_browser->min_pcnt = 0.0;
 	}
 
 	active_browser = cl_browser;
+	/* Default to non-hierarchy for cacheline view */
+	symbol_conf.report_hierarchy = false;
 
 	/* reset abort key so that it can get Ctrl-C as a key */
 	SLang_reset_tty();
@@ -4342,16 +4559,18 @@ static int perf_c2c__hists_browse(struct hists *hists)
         case 'd':
             if (!is_symbol_view && active_browser->he_selection) {
                 perf_c2c__browse_cacheline(active_browser->he_selection);
+            } else if (is_symbol_view && active_browser->he_selection) {
+                struct hist_entry *he = active_browser->he_selection;
+                /* Check if this is a cacheline grandchild entry */
+                if (!he->ms.sym && he->mem_info && he->parent_he && he->parent_he->parent_he) {
+                    /* Browse filtered cacheline view for this cacheline */
+                    perf_c2c__browse_symbol_pair_cacheline(he);
+                }
             }
             break;
         case K_ENTER:
         case K_RIGHT:
-            /* In symbol view, Enter opens the pair-filtered Shared Data Cache Line Table */
-            if (is_symbol_view && active_browser->he_selection) {
-                struct hist_entry *he = active_browser->he_selection;
-                if (he->parent_he)
-                    perf_c2c__browse_symbol_pair_cachelines(he);
-            }
+            /* Disable jumping into separate cacheline view from symbol view */
             break;
 		case 'e':
 		case '+':
@@ -4373,19 +4592,21 @@ static int perf_c2c__hists_browse(struct hists *hists)
 						populate_symbol_children(he);
 					}
 					
-					/* Toggle the folded state only if we have children */
-					if (!RB_EMPTY_ROOT(&he->hroot_out.rb_root)) {
-						he->unfolded = !he->unfolded;
-						if (verbose > 1)
-							printf("Symbol %s %s\n", 
-							       he->ms.sym ? he->ms.sym->name : "[unknown]",
-							       he->unfolded ? "expanded" : "collapsed");
-						active_browser->b.seek(&active_browser->b, SEEK_SET, 0);
-					} else {
-						if (verbose)
-							printf("Warning: No children created for %s\n",
-							       he->ms.sym ? he->ms.sym->name : "[unknown]");
-					}
+                    /* Toggle the folded state only if we have children */
+                    if (!RB_EMPTY_ROOT(&he->hroot_out.rb_root)) {
+                        he->unfolded = !he->unfolded;
+                        if (verbose > 1)
+                            printf("Symbol %s %s\n", 
+                                   he->ms.sym ? he->ms.sym->name : "[unknown]",
+                                   he->unfolded ? "expanded" : "collapsed");
+                        /* Update the browser to reflect hierarchy changes */
+                        c2c_browser__update_nr_entries(active_browser);
+                        active_browser->b.seek(&active_browser->b, SEEK_SET, 0);
+                    } else {
+                        if (verbose)
+                            printf("Warning: No children created for %s\n",
+                                   he->ms.sym ? he->ms.sym->name : "[unknown]");
+                    }
 				} else {
 					if (verbose > 1)
 						printf("Symbol %s has no related symbols\n",
