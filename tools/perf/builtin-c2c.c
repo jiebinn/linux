@@ -723,7 +723,7 @@ iaddr_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
         /* Indent child addresses by 4 spaces but preserve column width */
         char out[40];
         scnprintf(out, sizeof(out), "    %s", HEX_STR(buf, addr));
-        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+        return scnprintf(hpp->buf, hpp->size, "%*s", width, out);
     }
 
 	return scnprintf(hpp->buf, hpp->size, "%*s", width, HEX_STR(buf, addr));
@@ -1225,6 +1225,11 @@ percent_store_refs_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
 	}
 
+	/* In symbol view, hide Store Refs for cacheline grandchildren (depth >= 2) */
+	if (he->parent_he && he->parent_he->parent_he) {
+		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+	}
+
     /* For child symbols, scope denominator to all siblings under parent */
     if (he->parent_he) {
         struct rb_node *nd;
@@ -1247,7 +1252,7 @@ percent_store_refs_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
         /* Indent child Store Refs by 4 spaces but preserve column width */
         char out[32];
         scnprintf(out, sizeof(out), "    %s", PERC_STR(buf, per));
-        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+        return scnprintf(hpp->buf, hpp->size, "%*s", width, out);
     }
 
     return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
@@ -1272,8 +1277,14 @@ total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
         char out[32];
         char num[24];
         scnprintf(num, sizeof(num), "%" PRIu64, total);
-        scnprintf(out, sizeof(out), "    %s", num);
-        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+        
+        /* For cacheline grandchildren (depth 2), use more indentation */
+        if (he->parent_he->parent_he) {
+            scnprintf(out, sizeof(out), "        %s", num);  /* 8 spaces for grandchildren */
+        } else {
+            scnprintf(out, sizeof(out), "    %s", num);  /* 4 spaces for children */
+        }
+        return scnprintf(hpp->buf, hpp->size, "%*s", width, out);
     }
 
     return scnprintf(hpp->buf, hpp->size, "%*" PRIu64, width, total);
@@ -1288,9 +1299,15 @@ percent_store_refs_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
     int width = c2c_width(fmt, hpp, he->hists);
     double per;
+    char buf[10];
     
 	/* In symbol view, hide Store Refs for parent symbols (depth 0) */
 	if (!he->parent_he) {
+		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+	}
+
+	/* In symbol view, hide Store Refs for cacheline grandchildren (depth >= 2) */
+	if (he->parent_he && he->parent_he->parent_he) {
 		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
 	}
 
@@ -1309,6 +1326,14 @@ percent_store_refs_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
         per = denom ? (100.0 * (double)numer / (double)denom) : 0.0;
     } else {
         per = percent_store_refs(c2c_he);
+    }
+    
+    if (he->parent_he) {
+        /* For child symbols, use regular scnprintf with indentation */
+        char out[32];
+        scnprintf(buf, sizeof(buf), "%.2f%%", per);
+        scnprintf(out, sizeof(out), "    %s", buf);
+        return scnprintf(hpp->buf, hpp->size, "%*s", width, out);
     }
     
 #ifdef HAVE_SLANG_SUPPORT
@@ -3954,7 +3979,7 @@ static int build_symbol_hists(void)
     //    "cycles_percent,percent_store_refs,iaddr,symbol,cycles_total,stores_l1hit,latency_rmt_hitm,latency_lcl_hitm,latency_load,tot_recs,cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,cycles_rmt_hitm,cycles_lcl_hitm,cycles_load",
     //    "cycles_percent");
     ret = c2c_hists__reinit(&c2c.symbol_hists,
-        "cycles_percent,percent_store_refs,total_stores,iaddr,symbol,cacheline_symbol",
+        "cycles_percent,percent_store_refs,total_stores,iaddr,cacheline_symbol,symbol",
         "cycles_percent");
 	if (ret)
 		return ret;
