@@ -3979,7 +3979,7 @@ static int build_symbol_hists(void)
     //    "cycles_percent,percent_store_refs,iaddr,symbol,cycles_total,stores_l1hit,latency_rmt_hitm,latency_lcl_hitm,latency_load,tot_recs,cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,cycles_rmt_hitm,cycles_lcl_hitm,cycles_load",
     //    "cycles_percent");
     ret = c2c_hists__reinit(&c2c.symbol_hists,
-        "cycles_percent,percent_store_refs,total_stores,iaddr,cacheline_symbol,symbol",
+        "cycles_percent,total_stores,iaddr,cacheline_symbol,symbol",
         "cycles_percent");
 	if (ret)
 		return ret;
