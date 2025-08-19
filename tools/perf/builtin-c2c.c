@@ -1268,9 +1268,9 @@ percent_store_refs_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     }
 
     if (he->parent_he) {
-        /* Indent child Store Refs by 4 spaces but preserve column width */
+        /* Indent child Store Refs by 6 spaces but preserve column width */
         char out[32];
-        scnprintf(out, sizeof(out), "    %s", PERC_STR(buf, per));
+        scnprintf(out, sizeof(out), "      %s", PERC_STR(buf, per));
         return scnprintf(hpp->buf, hpp->size, "%*s", width, out);
     }
 
@@ -1297,11 +1297,11 @@ total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
         char num[24];
         scnprintf(num, sizeof(num), "%" PRIu64, total);
         
-        /* For deeper hierarchy, increase indentation for readability */
+        /* Consistent indentation with symbol hierarchy */
         if (he->parent_he->parent_he) {
-            scnprintf(out, sizeof(out), "            %s", num);  /* 12 spaces for grandchildren */
+            scnprintf(out, sizeof(out), "        %s", num);  /* 8 spaces for grandchildren */
         } else {
-            scnprintf(out, sizeof(out), "        %s", num);  /* 8 spaces for children */
+            scnprintf(out, sizeof(out), "    %s", num);  /* 4 spaces for children */
         }
         return scnprintf(hpp->buf, hpp->size, "%*s", width, out);
     }
@@ -2029,7 +2029,7 @@ static struct c2c_dimension dim_total_stores = {
     .name       = "total_stores",
     .cmp        = store_cmp,
     .entry      = total_stores_entry,
-    .width      = 10,
+    .width      = 14,
 };
 
 /* Cacheline entry for symbol view */
@@ -2065,7 +2065,7 @@ static struct c2c_dimension dim_cacheline_symbol = {
     .name       = "cacheline_symbol",
     .cmp        = dcacheline_cmp,
     .entry      = cacheline_symbol_entry,
-    .width      = 18,
+    .width      = 22,
 };
 
 static struct c2c_dimension dim_dram_lcl = {
@@ -2109,7 +2109,6 @@ symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	const char *symname = he->ms.sym ? he->ms.sym->name : "[unknown]";
 	int width = c2c_width(fmt, hpp, he->hists);
 	char buf[512];
-	int indent = 0;
 
 	if (!len) {
 		len = hists__col_len(he->hists, dim->se->se_width_idx);
@@ -2122,34 +2121,20 @@ symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
 	}
 
-	/* Calculate indentation based on hierarchy depth */
-	if (he->parent_he) {
-		indent = he->depth * 2;  /* 2 spaces per level */
-		if (indent > 20) indent = 20;  /* Max indent */
-	}
-
-	/* Cacheline grandchildren: no symbol, show cacheline address */
-	if (!he->ms.sym && he->mem_info && he->parent_he && he->parent_he->parent_he) {
-		u64 cl = 0;
-		if (mem_info__daddr(he->mem_info))
-			cl = cl_address(mem_info__daddr(he->mem_info)->addr, chk_double_cl);
-		snprintf(buf, sizeof(buf), "%*s0x%lx", indent, "", cl);
-		return scnprintf(hpp->buf, hpp->size, "%-*s", width, buf);
-	}
-
 	/* Build the symbol string with proper indentation and folding indicator */
-	if (he->parent_he) {
-		/* Child entries */
+	if (he->parent_he && he->parent_he->parent_he) {
+		/* Cacheline grandchildren: no symbol display */
+		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+	} else if (he->parent_he) {
+		/* Child entries (depth 1) */
 		if (he->has_children) {
-			snprintf(buf, sizeof(buf), "%*s%c %s", 
-				 indent > 0 ? indent - 2 : 0, "",
+			snprintf(buf, sizeof(buf), "    %c %s", 
 				 he->unfolded ? '-' : '+', symname);
 		} else {
-			snprintf(buf, sizeof(buf), "%*s  %s", 
-				 indent > 0 ? indent - 2 : 0, "", symname);
+			snprintf(buf, sizeof(buf), "      %s", symname);
 		}
 	} else {
-		/* Top-level entries */
+		/* Top-level entries (depth 0) */
 		if (he->has_children) {
 			snprintf(buf, sizeof(buf), "%c %s", 
 				 he->unfolded ? '-' : '+', symname);
@@ -4006,7 +3991,7 @@ static int build_symbol_hists(void)
     //    "cycles_percent,percent_store_refs,iaddr,symbol,cycles_total,stores_l1hit,latency_rmt_hitm,latency_lcl_hitm,latency_load,tot_recs,cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,cycles_rmt_hitm,cycles_lcl_hitm,cycles_load",
     //    "cycles_percent");
     ret = c2c_hists__reinit(&c2c.symbol_hists,
-        "cycles_percent,total_stores,iaddr,cacheline_symbol,symbol",
+        "cycles_percent,total_stores,iaddr,symbol,cacheline_symbol",
         "cycles_percent");
 	if (ret)
 		return ret;
