@@ -1053,6 +1053,7 @@ PERCENT_FN(rmt_hitm)
 PERCENT_FN(lcl_hitm)
 PERCENT_FN(rmt_peer)
 PERCENT_FN(lcl_peer)
+PERCENT_FN(st_l1hit)
 PERCENT_FN(st_l1miss)
 PERCENT_FN(st_na)
 
@@ -1065,6 +1066,13 @@ percent_cl_stores_l1hit_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	double per = percent(he_stats(he)->st_l1hit, total_stats(he)->st_l1hit);
 	char buf[10];
 	return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
+}
+
+static int
+percent_cl_stores_l1hit_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+			       struct hist_entry *he)
+{
+	return percent_color(fmt, hpp, he, percent_st_l1hit);
 }
 
 static int
@@ -1861,6 +1869,7 @@ static struct c2c_dimension dim_cl_stores_l1hit = {
 	.name		= "cl_stores_l1hit",
 	.cmp		= st_l1hit_cmp,
 	.entry		= percent_cl_stores_l1hit_entry,
+	.color		= percent_cl_stores_l1hit_color,
 	.width		= 7,
 };
 
@@ -2657,8 +2666,8 @@ static int c2c_se_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 			len = symbol_width(he->hists, dim->se);
 	}
 
-	/* Use custom symbol entry function for symbol expansion support */
-	if (dim == &dim_symbol)
+	/* Use custom symbol entry only in symbol view to avoid altering cacheline view alignment */
+	if (dim == &dim_symbol && he->hists == &c2c.symbol_hists.hists)
 		return symbol_entry(fmt, hpp, he);
 
 	return dim->se->se_snprintf(he, hpp->buf, hpp->size, len);
