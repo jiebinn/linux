@@ -4464,6 +4464,9 @@ static int perf_c2c__browse_symbol_pair_cacheline(struct hist_entry *he_grandchi
                     
                     /* Browser will use the filtered flag to show/hide entries */
                     
+                    /* Resort by offset after filtering to match cacheline view ordering */
+                    hists__output_resort(&c2c_hists_cl->hists, NULL);
+                    
                     /* Use the standard cacheline details title */
                     cl_browser->title = perf_c2c_cacheline_browser__title;
 
