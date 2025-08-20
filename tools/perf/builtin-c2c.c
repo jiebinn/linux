@@ -209,6 +209,12 @@ out_free:
 #define c2c_debug2(fmt, ...) c2c_debug(2, fmt, ##__VA_ARGS__)
 #define c2c_debug3(fmt, ...) c2c_debug(3, fmt, ##__VA_ARGS__)
 
+/* Helper function to return empty string with proper width formatting */
+static int return_empty_string(struct perf_hpp *hpp, int width)
+{
+	return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+}
+
 /* Helper function to free child entries properly */
 static void free_child_entries(struct hist_entry *parent_he)
 {
@@ -823,7 +829,7 @@ STAT_FN(tot_peer)
 STAT_FN(store)
 STAT_FN(st_l1hit)
 STAT_FN(st_l1miss)
-STAT_FN_CMP(st_na)
+STAT_FN(st_na)
 STAT_FN(ld_fbhit)
 STAT_FN(ld_l1hit)
 STAT_FN(ld_l2hit)
@@ -1112,8 +1118,6 @@ percent_cl_stores_na_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
 }
 
-STAT_FN_ENTRY(st_na)
-
 static int
 percent_rmt_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		       struct hist_entry *he)
@@ -1258,12 +1262,12 @@ percent_store_refs_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 
 	/* In symbol view, hide Store Refs for parent symbols (depth 0) */
 	if (!he->parent_he) {
-		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+		return return_empty_string(hpp, width);
 	}
 
 	/* In symbol view, hide Store Refs for cacheline grandchildren (depth >= 2) */
 	if (he->parent_he && he->parent_he->parent_he) {
-		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+		return return_empty_string(hpp, width);
 	}
 
     /* For child symbols, scope denominator to all siblings under parent */
@@ -1339,12 +1343,12 @@ percent_store_refs_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     
 	/* In symbol view, hide Store Refs for parent symbols (depth 0) */
 	if (!he->parent_he) {
-		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+		return return_empty_string(hpp, width);
 	}
 
 	/* In symbol view, hide Store Refs for cacheline grandchildren (depth >= 2) */
 	if (he->parent_he && he->parent_he->parent_he) {
-		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+		return return_empty_string(hpp, width);
 	}
 
     /* For child symbols, use sibling-scoped percentage calculation */
@@ -1681,7 +1685,7 @@ cl_idx_empty_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 {
 	int width = c2c_width(fmt, hpp, he->hists);
 
-	return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+	return return_empty_string(hpp, width);
 }
 
 #define HEADER_LOW(__h)			\
@@ -2135,13 +2139,13 @@ symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 
 	/* In symbol view, hide Symbol for cacheline entries (depth 2) */
 	if (he->depth == 2 && he->parent_he && he->parent_he->parent_he) {
-		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+		return return_empty_string(hpp, width);
 	}
 
 	/* Build the symbol string with proper indentation and folding indicator */
 	if (he->parent_he && he->parent_he->parent_he) {
 		/* Cacheline grandchildren: no symbol display */
-		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+		return return_empty_string(hpp, width);
 	} else if (he->parent_he) {
 		/* Child entries (depth 1) */
 		if (he->has_children) {
@@ -2283,27 +2287,35 @@ cycles_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
 }
 
+/* Helper function to calculate total cycles for a single c2c_hist_entry */
+static uint64_t calculate_symbol_total_cycles(struct c2c_hist_entry *c2c_he)
+{
+	uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load;
+
+	cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
+	cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
+	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
+	cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
+
+	return cycles_rmt + cycles_lcl + cycles_load;
+}
+
 static int
 cycles_total_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		   struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
     int width = c2c_width(fmt, hpp, he->hists);
-	uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load;
+	uint64_t total_cycles;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
-	cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
-	cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
-	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
-    cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
+	total_cycles = calculate_symbol_total_cycles(c2c_he);
 
     if (he->parent_he) {
-        return scnprintf(hpp->buf, hpp->size, "    %llu",
-                 cycles_rmt + cycles_lcl + cycles_load);
+        return scnprintf(hpp->buf, hpp->size, "    %llu", total_cycles);
     }
 
-    return scnprintf(hpp->buf, hpp->size, "%*llu", width,
-             cycles_rmt + cycles_lcl + cycles_load);
+    return scnprintf(hpp->buf, hpp->size, "%*llu", width, total_cycles);
 }
 
 static int
@@ -2336,14 +2348,8 @@ static uint64_t get_total_cycles_all_symbols(void)
 	while (nd) {
 		struct hist_entry *he = rb_entry(nd, struct hist_entry, rb_node);
 		struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
-		uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load;
 
-		cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
-		cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
-		other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
-		cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
-
-		total_cycles += cycles_rmt + cycles_lcl + cycles_load;
+		total_cycles += calculate_symbol_total_cycles(c2c_he);
 		nd = rb_next(nd);
 	}
 	return total_cycles;
@@ -2355,21 +2361,17 @@ cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 {
 	struct c2c_hist_entry *c2c_he;
 	int width = c2c_width(fmt, hpp, he->hists);
-	uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load, symbol_cycles;
+	uint64_t symbol_cycles;
 	uint64_t total_cycles;
 	double percent;
 
 	/* In symbol view, hide Cycles Percent for child symbols and cachelines */
 	if (he->parent_he) {
-		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+		return return_empty_string(hpp, width);
 	}
 
     c2c_he = container_of(he, struct c2c_hist_entry, he);
-    cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
-    cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
-    other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
-    cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
-    symbol_cycles = cycles_rmt + cycles_lcl + cycles_load;
+    symbol_cycles = calculate_symbol_total_cycles(c2c_he);
 
     /* For child symbols, scope denominator to related cachelines (siblings under parent) */
     if (he->parent_he) {
@@ -2409,19 +2411,11 @@ cycles_percent_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 {
 	struct c2c_hist_entry *c2c_left = container_of(left, struct c2c_hist_entry, he);
 	struct c2c_hist_entry *c2c_right = container_of(right, struct c2c_hist_entry, he);
-	uint64_t cycles_left, cycles_right, other_load_left, other_load_right;
+	uint64_t cycles_left, cycles_right;
 
-	/* Calculate cycles for left */
-	other_load_left = c2c_left->stats.load - c2c_left->stats.rmt_hitm - c2c_left->stats.lcl_hitm;
-	cycles_left = avg_stats(&c2c_left->cstats.rmt_hitm) * c2c_left->stats.rmt_hitm +
-		      avg_stats(&c2c_left->cstats.lcl_hitm) * c2c_left->stats.lcl_hitm +
-		      avg_stats(&c2c_left->cstats.load) * other_load_left;
-
-	/* Calculate cycles for right */
-	other_load_right = c2c_right->stats.load - c2c_right->stats.rmt_hitm - c2c_right->stats.lcl_hitm;
-	cycles_right = avg_stats(&c2c_right->cstats.rmt_hitm) * c2c_right->stats.rmt_hitm +
-		       avg_stats(&c2c_right->cstats.lcl_hitm) * c2c_right->stats.lcl_hitm +
-		       avg_stats(&c2c_right->cstats.load) * other_load_right;
+	/* Calculate cycles using the helper function */
+	cycles_left = calculate_symbol_total_cycles(c2c_left);
+	cycles_right = calculate_symbol_total_cycles(c2c_right);
 
 	return cycles_left - cycles_right;
 }
