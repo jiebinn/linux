@@ -80,7 +80,7 @@ struct c2c_hist_entry {
 	char			*nodestr;
 
 	/* Symbol association support */
-	struct list_head	 related_symbols;  /* List of related symbols */
+	struct list_head	related_symbols;	/* Related symbols list */
 
 	/*
 	 * must be at the end,
@@ -95,10 +95,10 @@ static char const *coalesce_default = "iaddr";
 struct related_symbol {
 	struct list_head	 list;
 	struct symbol		*sym;
-	uint64_t		 iaddr;  /* Code address for this symbol */
-	struct c2c_stats	 stats;  /* Aggregated stats for this related symbol */
-    struct compute_stats cstats; /* Aggregated latency/compute stats for this related symbol */
-	int			 association_count;  /* Number of shared cachelines */
+	uint64_t		iaddr;			/* Code address */
+	struct c2c_stats	stats;			/* Aggregated stats */
+	struct compute_stats	cstats;			/* Compute stats */
+	int			association_count;	/* Shared cachelines count */
 };
 
 struct perf_c2c {
@@ -201,13 +201,11 @@ out_free:
 	return NULL;
 }
 
-/* Debug output macros to optimize verbose printing */
+/* Debug output macros for verbose logging */
 #define c2c_debug(level, fmt, ...) \
 	do { if (verbose >= level) printf(fmt, ##__VA_ARGS__); } while (0)
 
 #define c2c_debug1(fmt, ...) c2c_debug(1, fmt, ##__VA_ARGS__)
-#define c2c_debug2(fmt, ...) c2c_debug(2, fmt, ##__VA_ARGS__)
-#define c2c_debug3(fmt, ...) c2c_debug(3, fmt, ##__VA_ARGS__)
 
 /* Helper function to return empty string with proper width formatting */
 static int return_empty_string(struct perf_hpp *hpp, int width)
@@ -734,7 +732,7 @@ iaddr_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	char buf[20];
 
-	/* In symbol view, hide Code address for cacheline entries (depth 2) */
+	/* Hide Code address for cacheline entries */
 	if (he->depth == 2 && he->parent_he && he->parent_he->parent_he) {
 		return scnprintf(hpp->buf, hpp->size, "%-*s", width, "");
 	}
@@ -743,7 +741,7 @@ iaddr_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		addr = mem_info__iaddr(he->mem_info)->addr;
 
     if (he->parent_he) {
-        /* Indent child addresses by 4 spaces but preserve column width */
+        /* Indent child addresses */
         char out[40];
         scnprintf(out, sizeof(out), "    %s", HEX_STR(buf, addr));
         return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
@@ -1260,13 +1258,8 @@ percent_store_refs_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
     double per;
 
-	/* In symbol view, hide Store Refs for parent symbols (depth 0) */
-	if (!he->parent_he) {
-		return return_empty_string(hpp, width);
-	}
-
-	/* In symbol view, hide Store Refs for cacheline grandchildren (depth >= 2) */
-	if (he->parent_he && he->parent_he->parent_he) {
+	/* Hide Store Refs for parent symbols and cacheline grandchildren */
+	if (!he->parent_he || (he->parent_he && he->parent_he->parent_he)) {
 		return return_empty_string(hpp, width);
 	}
 
@@ -1308,7 +1301,7 @@ total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     uint64_t total = (uint64_t)c2c_he->stats.store;
     int width = c2c_width(fmt, hpp, he->hists);
 
-	/* In symbol view, hide Stores for parent symbols (depth 0) */
+	/* Hide Stores for parent symbols */
 	if (!he->parent_he) {
 		return scnprintf(hpp->buf, hpp->size, "%-*s", width, "");
 	}
@@ -1341,13 +1334,8 @@ percent_store_refs_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     double per;
     char buf[10];
     
-	/* In symbol view, hide Store Refs for parent symbols (depth 0) */
-	if (!he->parent_he) {
-		return return_empty_string(hpp, width);
-	}
-
-	/* In symbol view, hide Store Refs for cacheline grandchildren (depth >= 2) */
-	if (he->parent_he && he->parent_he->parent_he) {
+	/* Hide Store Refs for parent symbols and cacheline grandchildren */
+	if (!he->parent_he || (he->parent_he && he->parent_he->parent_he)) {
 		return return_empty_string(hpp, width);
 	}
 
@@ -2137,7 +2125,7 @@ symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 			len = symbol_width(he->hists, dim->se);
 	}
 
-	/* In symbol view, hide Symbol for cacheline entries (depth 2) */
+	/* Hide Symbol for cacheline entries */
 	if (he->depth == 2 && he->parent_he && he->parent_he->parent_he) {
 		return return_empty_string(hpp, width);
 	}
@@ -2365,7 +2353,7 @@ cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	uint64_t total_cycles;
 	double percent;
 
-	/* In symbol view, hide Cycles Percent for child symbols and cachelines */
+	/* Hide Cycles Percent for child symbols and cachelines */
 	if (he->parent_he) {
 		return return_empty_string(hpp, width);
 	}
@@ -3374,8 +3362,7 @@ static void populate_symbol_children(struct hist_entry *he)
 		return;
 	}
 
-	c2c_debug2("Creating children for symbol: %s (he=%p, hists=%p)\n",
-		   he->ms.sym ? he->ms.sym->name : "[unknown]", he, he->hists);
+
 
 	/* Create child entries sorted by Store Refs (stats.store) descending */
     {
@@ -3651,13 +3638,13 @@ static void populate_symbol_children(struct hist_entry *he)
 		rb_insert_color_cached(&child_he->rb_node, root, leftmost);
 		
         count++;
-        c2c_debug3("  Created child %d: %s\n", count, rel_sym->sym->name);
+
         }
 
         free(sorted);
     }
 
-	c2c_debug2("  Total children created: %d\n", count);
+
 	
 	/* Update parent's nr_rows to include all children */
 	if (count > 0) {
@@ -4150,21 +4137,14 @@ static int build_symbol_hists(void)
 	if (verbose) {
 		struct rb_node *nd;
 		int symbols_with_children = 0;
-		printf("Symbol view entries:\n");
 		nd = rb_first_cached(&c2c.symbol_hists.hists.entries);
 		while (nd) {
-			struct hist_entry *sym_he_debug = rb_entry(nd, struct hist_entry, rb_node);
-			struct c2c_hist_entry *c2c_he_debug = container_of(sym_he_debug, struct c2c_hist_entry, he);
-			if (sym_he_debug->ms.sym) {
-				int has_related = !list_empty(&c2c_he_debug->related_symbols);
-				printf("  Symbol: %s, has_children: %d, related_symbols: %d\n",
-				       sym_he_debug->ms.sym->name, sym_he_debug->has_children, has_related);
-				if (sym_he_debug->has_children)
-					symbols_with_children++;
+			struct hist_entry *sym_he = rb_entry(nd, struct hist_entry, rb_node);
+			if (sym_he->ms.sym && sym_he->has_children) {
+				symbols_with_children++;
 			}
 			nd = rb_next(nd);
 		}
-		printf("Total symbols with children: %d\n", symbols_with_children);
 	}
 
 	return 0;
