@@ -4586,9 +4586,9 @@ static int build_cl_output(char *cl_sort, bool no_source)
 						  "percent_lcl_peer," :
 						  "percent_rmt_hitm,"
 						  "percent_lcl_hitm,",
-		"cl_stores_l1hit,"
-		"cl_stores_l1miss,"
-		"cl_stores_na,"
+						  "percent_stores_l1hit,"
+						  "percent_stores_l1miss,"
+						  "percent_stores_na,"
 		"offset,offset_node,dcacheline_count,",
 		add_pid   ? "pid," : "",
 		add_tid   ? "tid," : "",
@@ -4637,21 +4637,12 @@ static int setup_coalesce(const char *coalesce, bool no_source)
 	if (asprintf(&c2c.cl_resort, "offset,%s", sort_str) < 0)
 		return -ENOMEM;
 
+	pr_debug("coalesce sort   fields: %s\n", c2c.cl_sort);
+	pr_debug("coalesce resort fields: %s\n", c2c.cl_resort);
+	pr_debug("coalesce output fields: %s\n", c2c.cl_output);
 	return 0;
 }
 
-/**
- * Main entry point for c2c report command.
- *
- * This function handles the c2c report subcommand, which analyzes
- * cache-to-cache transfers and false sharing between processes.
- * It processes performance data to identify cacheline contention
- * and provides detailed reports on cache access patterns.
- *
- * @param argc Number of command line arguments
- * @param argv Array of command line arguments
- * @return 0 on success, negative error code on failure
- */
 static int perf_c2c__report(int argc, const char **argv)
 {
 	struct itrace_synth_opts itrace_synth_opts = {
@@ -4763,13 +4754,13 @@ static int perf_c2c__report(int argc, const char **argv)
 
 	err = setup_coalesce(coalesce, no_source);
 	if (err) {
-		pr_debug("Failed to setup coalesce parameters\n");
+		pr_debug("Failed to initialize hists\n");
 		goto out_session;
 	}
 
 	err = c2c_hists__init(&c2c.hists, "dcacheline", 2, perf_session__env(session));
 	if (err) {
-		pr_debug("Failed to initialize cacheline hists\n");
+		pr_debug("Failed to initialize hists\n");
 		goto out_session;
 	}
 
@@ -4986,6 +4977,18 @@ static int perf_c2c__record(int argc, const char **argv)
 
 	for (j = 0; j < argc; j++, i++)
 		rec_argv[i] = argv[j];
+
+	if (verbose > 0) {
+		pr_debug("calling: ");
+
+		j = 0;
+
+		while (rec_argv[j]) {
+			pr_debug("%s ", rec_argv[j]);
+			j++;
+		}
+		pr_debug("\n");
+	}
 
 	ret = cmd_record(i, rec_argv);
 out:
