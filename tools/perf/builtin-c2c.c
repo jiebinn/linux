@@ -2061,7 +2061,7 @@ cacheline_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 
     /* Indent cacheline under child symbols to emphasize hierarchy */
     if (he->parent_he && he->parent_he->parent_he) {
-        scnprintf(out, sizeof(out), "        %s", HEX_STR(buf, addr));
+        scnprintf(out, sizeof(out), "    %s", HEX_STR(buf, addr));
         return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
     }
 
