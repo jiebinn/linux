@@ -91,9 +91,6 @@ struct c2c_hist_entry {
 
 static char const *coalesce_default = "iaddr";
 
-/* Helper macro to get c2c_hist_entry from hist_entry */
-#define c2c_he(he) container_of(he, struct c2c_hist_entry, he)
-
 /* Structure to represent related symbols */
 struct related_symbol {
 	struct list_head	 list;
@@ -250,7 +247,7 @@ static void c2c_he_free(void *he)
 	struct related_symbol *rel_sym, *tmp;
 	struct hist_entry *hist_entry = (struct hist_entry *)he;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	
 	/* Free child entries first */
 	free_child_entries(hist_entry);
@@ -310,7 +307,7 @@ he__get_c2c_hists(struct hist_entry *he,
 	struct c2c_hists *hists;
 	int ret;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	if (c2c_he->hists)
 		return c2c_he->hists;
 
@@ -478,7 +475,7 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 	if (he == NULL)
 		goto free_mi;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	c2c_add_stats(&c2c_he->stats, &stats);
 	c2c_add_stats(&c2c_hists->stats, &stats);
 
@@ -512,7 +509,7 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 		if (he == NULL)
 			goto free_mi;
 
-		c2c_he = c2c_he(he);
+		c2c_he = container_of(he, struct c2c_hist_entry, he);
 		c2c_add_stats(&c2c_he->stats, &stats);
 		c2c_add_stats(&c2c_hists->stats, &stats);
 		c2c_add_stats(&c2c_he->node_stats[node], &stats);
@@ -693,7 +690,7 @@ dcacheline_node_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	struct c2c_hist_entry *c2c_he;
 	int width = c2c_width(fmt, hpp, he->hists);
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	if (WARN_ON_ONCE(!c2c_he->nodestr))
 		return 0;
 
@@ -707,7 +704,7 @@ dcacheline_node_count(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	struct c2c_hist_entry *c2c_he;
 	int width = c2c_width(fmt, hpp, he->hists);
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	return scnprintf(hpp->buf, hpp->size, "%*lu", width, c2c_he->paddr_cnt);
 }
 
@@ -780,7 +777,7 @@ tot_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	unsigned int tot_hitm;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	tot_hitm = c2c_he->stats.lcl_hitm + c2c_he->stats.rmt_hitm;
 
 	return scnprintf(hpp->buf, hpp->size, "%*u", width, tot_hitm);
@@ -812,7 +809,7 @@ __f ## _entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,	\
 	struct c2c_hist_entry *c2c_he;				\
 	int width = c2c_width(fmt, hpp, he->hists);		\
 								\
-	c2c_he = c2c_he(he);	\
+	c2c_he = container_of(he, struct c2c_hist_entry, he);	\
 	return scnprintf(hpp->buf, hpp->size, "%*u", width,	\
 			 c2c_he->stats.__f);			\
 }
@@ -888,7 +885,7 @@ tot_recs_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t tot_recs;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	tot_recs = total_records(&c2c_he->stats);
 
 	return scnprintf(hpp->buf, hpp->size, "%*" PRIu64, width, tot_recs);
@@ -926,7 +923,7 @@ tot_loads_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t tot_recs;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	tot_recs = total_loads(&c2c_he->stats);
 
 	return scnprintf(hpp->buf, hpp->size, "%*" PRIu64, width, tot_recs);
@@ -960,7 +957,7 @@ percent_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	double per;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	per = get_percent(c2c_he);
 
 #ifdef HAVE_SLANG_SUPPORT
@@ -1023,7 +1020,7 @@ percent_costly_snoop_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	char buf[10];
 	double per;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	per = percent_costly_snoop(c2c_he);
 	return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
 }
@@ -1057,7 +1054,7 @@ static struct c2c_stats *he_stats(struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	return &c2c_he->stats;
 }
 
@@ -1254,58 +1251,6 @@ percent_rmt_peer_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 
 	return per_left - per_right;
 }
-
-/* Percent of Store Refs (Total Stores = stats.store) */
-static double percent_store_refs(struct c2c_hist_entry *c2c_he)
-{
-    struct c2c_hists *hists = container_of(c2c_he->he.hists, struct c2c_hists, hists);
-    uint64_t st = (uint64_t)c2c_he->stats.store;
-    uint64_t tot = (uint64_t)hists->stats.store;
-    return tot ? (100.0 * (double)st / (double)tot) : 0.0;
-}
-
-static int
-percent_store_refs_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-                         struct hist_entry *he)
-{
-    int width = c2c_width(fmt, hpp, he->hists);
-    char buf[10];
-    struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
-    double per;
-
-	/* Hide Store Refs for parent symbols and cacheline grandchildren */
-	if (!he->parent_he || (he->parent_he && he->parent_he->parent_he)) {
-		return return_empty_string(hpp, width);
-	}
-
-    /* For child symbols, scope denominator to all siblings under parent */
-    if (he->parent_he) {
-        struct rb_node *nd;
-        /* Use authoritative total stores: stats.store */
-        uint64_t numer = (uint64_t)c2c_he->stats.store;
-        uint64_t denom = 0;
-
-        /* Iterate over all siblings (children of the same parent) */
-        for (nd = rb_first_cached(&he->parent_he->hroot_out); nd; nd = rb_next(nd)) {
-            struct hist_entry *sibling_he = rb_entry(nd, struct hist_entry, rb_node);
-            struct c2c_hist_entry *sibling_c2c_he = container_of(sibling_he, struct c2c_hist_entry, he);
-            denom += (uint64_t)sibling_c2c_he->stats.store;
-        }
-        per = denom ? (100.0 * (double)numer / (double)denom) : 0.0;
-    } else {
-        per = percent_store_refs(c2c_he);
-    }
-
-    if (he->parent_he) {
-        /* Indent child Store Refs by 6 spaces but preserve column width */
-        char out[32];
-        scnprintf(out, sizeof(out), "      %s", PERC_STR(buf, per));
-        return scnprintf(hpp->buf, hpp->size, "%*s", width, out);
-    }
-
-    return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
-}
-
 /* New column: absolute total stores (authoritative stats.store) */
 static int
 total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
@@ -1339,96 +1284,6 @@ total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 }
 
 /* Use existing store_cmp generated by STAT_FN for comparisons */
-
-static int
-percent_store_refs_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-                         struct hist_entry *he)
-{
-    struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
-    int width = c2c_width(fmt, hpp, he->hists);
-    double per;
-    char buf[10];
-    
-	/* Hide Store Refs for parent symbols and cacheline grandchildren */
-	if (!he->parent_he || (he->parent_he && he->parent_he->parent_he)) {
-		return return_empty_string(hpp, width);
-	}
-
-    /* For child symbols, use sibling-scoped percentage calculation */
-    if (he->parent_he) {
-        struct rb_node *nd;
-        uint64_t numer = (uint64_t)c2c_he->stats.store;
-        uint64_t denom = 0;
-        
-        /* Iterate over all siblings (children of the same parent) */
-        for (nd = rb_first_cached(&he->parent_he->hroot_out); nd; nd = rb_next(nd)) {
-            struct hist_entry *sibling_he = rb_entry(nd, struct hist_entry, rb_node);
-            struct c2c_hist_entry *sibling_c2c_he = container_of(sibling_he, struct c2c_hist_entry, he);
-            denom += (uint64_t)sibling_c2c_he->stats.store;
-        }
-        per = denom ? (100.0 * (double)numer / (double)denom) : 0.0;
-    } else {
-        per = percent_store_refs(c2c_he);
-    }
-    
-    if (he->parent_he) {
-        /* For child symbols, use regular scnprintf with indentation */
-        char out[32];
-        scnprintf(buf, sizeof(buf), "%.2f%%", per);
-        scnprintf(out, sizeof(out), "    %s", buf);
-        return scnprintf(hpp->buf, hpp->size, "%*s", width, out);
-    }
-    
-#ifdef HAVE_SLANG_SUPPORT
-    if (use_browser)
-        return __hpp__slsmg_color_printf(hpp, "%*.2f%%", width - 1, per);
-#endif
-    return hpp_color_scnprintf(hpp, "%*.2f%%", width - 1, per);
-}
-
-static int64_t
-percent_store_refs_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
-                       struct hist_entry *left, struct hist_entry *right)
-{
-    struct c2c_hist_entry *c2c_left  = container_of(left, struct c2c_hist_entry, he);
-    struct c2c_hist_entry *c2c_right = container_of(right, struct c2c_hist_entry, he);
-    double per_left, per_right;
-    
-    /* For child symbols, use sibling-scoped percentage calculation */
-    if (left->parent_he) {
-        struct rb_node *nd;
-        uint64_t numer = (uint64_t)c2c_left->stats.store;
-        uint64_t denom = 0;
-        
-        /* Iterate over all siblings (children of the same parent) */
-        for (nd = rb_first_cached(&left->parent_he->hroot_out); nd; nd = rb_next(nd)) {
-            struct hist_entry *sibling_he = rb_entry(nd, struct hist_entry, rb_node);
-            struct c2c_hist_entry *sibling_c2c_he = container_of(sibling_he, struct c2c_hist_entry, he);
-            denom += (uint64_t)sibling_c2c_he->stats.store;
-        }
-        per_left = denom ? (100.0 * (double)numer / (double)denom) : 0.0;
-    } else {
-        per_left = percent_store_refs(c2c_left);
-    }
-    
-    if (right->parent_he) {
-        struct rb_node *nd;
-        uint64_t numer = (uint64_t)c2c_right->stats.store;
-        uint64_t denom = 0;
-        
-        /* Iterate over all siblings (children of the same parent) */
-        for (nd = rb_first_cached(&right->parent_he->hroot_out); nd; nd = rb_next(nd)) {
-            struct hist_entry *sibling_he = rb_entry(nd, struct hist_entry, rb_node);
-            struct c2c_hist_entry *sibling_c2c_he = container_of(sibling_he, struct c2c_hist_entry, he);
-            denom += (uint64_t)sibling_c2c_he->stats.store;
-        }
-        per_right = denom ? (100.0 * (double)numer / (double)denom) : 0.0;
-    } else {
-        per_right = percent_store_refs(c2c_right);
-    }
-    
-    return per_left - per_right;
-}
 
 static int
 percent_stores_l1miss_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
@@ -1542,7 +1397,7 @@ node_entry(struct perf_hpp_fmt *fmt __maybe_unused, struct perf_hpp *hpp,
 	int ret = 0;
 	DECLARE_BITMAP(set, c2c.cpus_cnt);
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
 	for (node = 0; node < c2c.nodes_cnt; node++) {
 		bitmap_zero(set, c2c.cpus_cnt);
@@ -1643,7 +1498,7 @@ static int									\
 __func(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp, struct hist_entry *he)	\
 {										\
 	struct c2c_hist_entry *c2c_he;						\
-	c2c_he = c2c_he(he);			\
+	c2c_he = container_of(he, struct c2c_hist_entry, he);			\
 	return mean_entry(fmt, hpp, he, avg_stats(&c2c_he->cstats.__val));	\
 }
 
@@ -1661,7 +1516,7 @@ cpucnt_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	char buf[10];
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
 	scnprintf(buf, 10, "%d", bitmap_weight(c2c_he->cpuset, c2c.cpus_cnt));
 	return scnprintf(hpp->buf, hpp->size, "%*s", width, buf);
@@ -1675,7 +1530,7 @@ cl_idx_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	char buf[10];
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
 	scnprintf(buf, 10, "%u", c2c_he->cacheline_idx);
 	return scnprintf(hpp->buf, hpp->size, "%*s", width, buf);
@@ -2019,14 +1874,7 @@ static struct c2c_dimension dim_percent_lcl_peer = {
 	.width		= 7,
 };
 
-static struct c2c_dimension dim_percent_stores_l1hit = {
-	.header		= HEADER_LOW("Store Refs"),
-	.name		= "percent_store_refs",
-	.cmp		= percent_store_refs_cmp,
-	.entry		= percent_store_refs_entry,
-	.color		= percent_store_refs_color,
-	.width		= 7,
-};
+
 
 static struct c2c_dimension dim_percent_stores_l1miss = {
 	.header		= HEADER_SPAN_LOW("L1 Miss"),
@@ -2237,7 +2085,7 @@ cycles_rmt_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t cycles;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
     cycles = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
 
     if (he->parent_he) {
@@ -2256,7 +2104,7 @@ cycles_lcl_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t cycles;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
     cycles = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
 
     if (he->parent_he) {
@@ -2276,7 +2124,7 @@ cycles_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t cycles, other_load;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
     cycles = avg_stats(&c2c_he->cstats.load) * other_load;
 
@@ -2310,7 +2158,7 @@ cycles_total_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t total_cycles;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	total_cycles = calculate_symbol_total_cycles(c2c_he);
 
     if (he->parent_he) {
@@ -2328,7 +2176,7 @@ cnt_other_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t other_load;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
 
     if (he->parent_he) {
@@ -2583,7 +2431,6 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_percent_lcl_hitm,
 	&dim_percent_rmt_peer,
 	&dim_percent_lcl_peer,
-	&dim_percent_stores_l1hit,
 	&dim_percent_stores_l1miss,
 	&dim_percent_stores_na,
 	&dim_total_stores,
@@ -2849,7 +2696,7 @@ static bool he__display(struct hist_entry *he, struct c2c_stats *stats)
 	if (c2c.show_all)
 		return true;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
 	switch (c2c.display) {
 	case DISPLAY_LCL_HITM:
@@ -2880,7 +2727,7 @@ static inline bool is_valid_hist_entry(struct hist_entry *he)
 	struct c2c_hist_entry *c2c_he;
 	bool has_record = false;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
 	/* It's a valid entry if contains stores */
 	if (c2c_he->stats.store)
@@ -2949,7 +2796,7 @@ static int filter_cb(struct hist_entry *he, void *arg __maybe_unused)
 {
 	struct c2c_hist_entry *c2c_he;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
 	if (c2c.show_src && !he->srcline)
 		he->srcline = hist_entry__srcline(he);
@@ -2969,7 +2816,7 @@ static int resort_cl_cb(struct hist_entry *he, void *arg)
 	struct c2c_hists *c2c_hists;
 	bool display = he__display(he, &c2c.shared_clines_stats);
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	c2c_hists = c2c_he->hists;
 
 	if (display && c2c_hists) {
@@ -3080,7 +2927,7 @@ static int setup_nodes(struct perf_session *session)
 static int resort_shared_cl_cb(struct hist_entry *he, void *arg __maybe_unused)
 {
 	struct c2c_hist_entry *c2c_he;
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
 	if (HAS_HITMS(c2c_he) || HAS_PEER(c2c_he)) {
 		c2c.shared_clines++;
@@ -3244,7 +3091,7 @@ static void print_pareto(FILE *out, struct perf_env *env)
 		if (he->filtered)
 			continue;
 
-		c2c_he = c2c_he(he);
+		c2c_he = container_of(he, struct c2c_hist_entry, he);
 		print_cacheline(c2c_he->hists, he, &hpp_list, out);
 	}
 }
@@ -3324,7 +3171,7 @@ static void perf_c2c__hists_fprintf(FILE *out, struct perf_session *session)
 /*
  * Create child hist_entry objects for related symbols
  * This enables the hierarchical display in the TUI browser
- * Children are inserted sorted by Store Refs (stats.store) descending
+ * Children are inserted sorted by Stores (stats.store) descending
  */
 static void populate_symbol_children(struct hist_entry *he)
 {
@@ -3345,7 +3192,7 @@ static void populate_symbol_children(struct hist_entry *he)
 	if (!RB_EMPTY_ROOT(&root->rb_root))
 		return;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	if (!c2c_he)
 		return;
 
@@ -3355,7 +3202,7 @@ static void populate_symbol_children(struct hist_entry *he)
 		return;
 	}
 
-	/* Create child entries sorted by Store Refs (stats.store) descending */
+	/* Create child entries sorted by Stores (stats.store) descending */
     {
         int num_rel = 0, idx = 0, i;
         struct related_symbol **sorted = NULL;
@@ -3485,7 +3332,7 @@ static void populate_symbol_children(struct hist_entry *he)
 		{
 			struct rb_node *nd_cl = rb_first_cached(&c2c.hists.hists.entries);
 			struct rb_root_cached *groot = &child_he->hroot_out;
-			/* temp array to sort grandchildren by Store Refs */
+			/* temp array to sort grandchildren by Stores */
 			struct grand_item { struct c2c_hist_entry *grand_c2c; struct hist_entry *grand_he; u64 stores; } *items = NULL;
 			int items_cnt = 0, items_cap = 0;
 			while (nd_cl) {
@@ -3962,10 +3809,6 @@ static int build_symbol_hists(void)
 		return ret;
 
 	/* Setup output fields for symbol view - sorted by cycles percentage (descending) */
-	/* Added iaddr to show code address */
-    //ret = c2c_hists__reinit(&c2c.symbol_hists,
-    //    "cycles_percent,percent_store_refs,iaddr,symbol,cycles_total,stores_l1hit,latency_rmt_hitm,latency_lcl_hitm,latency_load,tot_recs,cnt_rmt_hitm,cnt_lcl_hitm,cnt_other_load,cycles_rmt_hitm,cycles_lcl_hitm,cycles_load",
-    //    "cycles_percent");
     ret = c2c_hists__reinit(&c2c.symbol_hists,
         "cycles_percent,total_stores,iaddr,symbol,cacheline_symbol",
         "cycles_percent");
@@ -3984,7 +3827,7 @@ static int build_symbol_hists(void)
 		struct rb_node *next_cl;
 
 		he = rb_entry(next, struct hist_entry, rb_node);
-		c2c_he = c2c_he(he);
+		c2c_he = container_of(he, struct c2c_hist_entry, he);
 
 		/* Only iterate through detailed accesses to this cacheline */
 		/* Skip the cacheline's own data to avoid double-counting */
@@ -4183,7 +4026,7 @@ static int perf_c2c__browse_cacheline(struct hist_entry *he)
 	/* Display compact version first. */
 	c2c.symbol_full = false;
 
-	c2c_he = c2c_he(he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	c2c_hists = c2c_he->hists;
 
     /* If hists is NULL (copied entry), find the original cacheline hists by address */
