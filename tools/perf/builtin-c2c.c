@@ -285,18 +285,6 @@ static int c2c_hists__init(struct c2c_hists *hists,
 			   int nr_header_lines,
 			   struct perf_env *env);
 
-/**
- * Get or create c2c_hists for a hist_entry.
- *
- * This function retrieves the c2c_hists associated with a hist_entry,
- * creating it if it doesn't exist. The c2c_hists is used to store
- * detailed cacheline access information for the symbol.
- *
- * @param he The hist_entry to get c2c_hists for
- * @param sort Sort specification string
- * @param nr_header_lines Number of header lines for display
- * @return Pointer to c2c_hists on success, NULL on failure
- */
 static struct c2c_hists*
 he__get_c2c_hists(struct hist_entry *he,
 		  const char *sort,
@@ -466,8 +454,6 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 	mi_dup = mem_info__get(mi);
 
 	c2c_decode_stats(&stats, mi);
-
-
 
 	he = hists__add_entry_ops(&c2c_hists->hists, &c2c_entry_ops,
 				  &al, NULL, NULL, mi, NULL,
