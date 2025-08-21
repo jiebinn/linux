@@ -201,11 +201,7 @@ out_free:
 	return NULL;
 }
 
-/* Debug output macros for verbose logging */
-#define c2c_debug(level, fmt, ...) \
-	do { if (verbose >= level) printf(fmt, ##__VA_ARGS__); } while (0)
 
-#define c2c_debug1(fmt, ...) c2c_debug(1, fmt, ##__VA_ARGS__)
 
 /* Helper function to return empty string with proper width formatting */
 static int return_empty_string(struct perf_hpp *hpp, int width)
@@ -229,20 +225,17 @@ static void free_child_entries(struct hist_entry *parent_he)
 		
 		child_he = rb_entry(nd, struct hist_entry, rb_node);
 		child_c2c_he = container_of(child_he, struct c2c_hist_entry, he);
-		
-		/* Free stat_acc if allocated */
+
 		if (child_he->stat_acc) {
 			free(child_he->stat_acc);
 			child_he->stat_acc = NULL;
 		}
-		
-		/* Free synthetic mem_info if allocated */
+
 		if (child_he->mem_info) {
 			free(child_he->mem_info);
 			child_he->mem_info = NULL;
 		}
-		
-		/* Remove from tree and free */
+
 		rb_erase_cached(&child_he->rb_node, &parent_he->hroot_out);
 		free(child_c2c_he);
 		
@@ -272,7 +265,6 @@ static void c2c_he_free(void *he)
 		free(rel_sym);
 	}
 
-	/* Free stat_acc if it was allocated for child entries */
 	if (hist_entry->parent_he && symbol_conf.cumulate_callchain && hist_entry->stat_acc) {
 		free(hist_entry->stat_acc);
 		hist_entry->stat_acc = NULL;
@@ -295,6 +287,18 @@ static int c2c_hists__init(struct c2c_hists *hists,
 			   int nr_header_lines,
 			   struct perf_env *env);
 
+/**
+ * Get or create c2c_hists for a hist_entry.
+ *
+ * This function retrieves the c2c_hists associated with a hist_entry,
+ * creating it if it doesn't exist. The c2c_hists is used to store
+ * detailed cacheline access information for the symbol.
+ *
+ * @param he The hist_entry to get c2c_hists for
+ * @param sort Sort specification string
+ * @param nr_header_lines Number of header lines for display
+ * @return Pointer to c2c_hists on success, NULL on failure
+ */
 static struct c2c_hists*
 he__get_c2c_hists(struct hist_entry *he,
 		  const char *sort,
@@ -2401,7 +2405,6 @@ cycles_percent_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	struct c2c_hist_entry *c2c_right = container_of(right, struct c2c_hist_entry, he);
 	uint64_t cycles_left, cycles_right;
 
-	/* Calculate cycles using the helper function */
 	cycles_left = calculate_symbol_total_cycles(c2c_left);
 	cycles_right = calculate_symbol_total_cycles(c2c_right);
 
@@ -3328,36 +3331,21 @@ static void populate_symbol_children(struct hist_entry *he)
 	bool leftmost = true;
 	int count = 0;
 
-	if (!he) {
-		if (verbose)
-			printf("populate_symbol_children: NULL hist_entry\n");
+	if (!he || !he->has_children)
 		return;
-	}
-
-	if (!he->has_children) {
-		if (verbose)
-			printf("populate_symbol_children: hist_entry has no children\n");
-		return;
-	}
 
 	root = &he->hroot_out;
 	
 	/* If already populated, return */
-	if (!RB_EMPTY_ROOT(&root->rb_root)) {
-			c2c_debug1("populate_symbol_children: already populated\n");
+	if (!RB_EMPTY_ROOT(&root->rb_root))
 		return;
-	}
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
-	if (!c2c_he) {
-			c2c_debug1("populate_symbol_children: NULL c2c_hist_entry\n");
+	if (!c2c_he)
 		return;
-	}
 
 	/* Ensure related_symbols list is valid */
 	if (list_empty(&c2c_he->related_symbols)) {
-			c2c_debug1("Warning: Symbol %s marked as expandable but has no related symbols\n",
-		   he->ms.sym ? he->ms.sym->name : "[unknown]");
 		he->has_children = false;  /* Reset inconsistent state */
 		return;
 	}
@@ -3673,8 +3661,6 @@ static void build_symbol_associations(void)
 	struct c2c_hist_entry *c2c_he_sym;
 	int associations_found = 0;
 
-	c2c_debug1("Building symbol associations from cacheline details...\n");
-
 	/*
 	 * New approach: Use actual cacheline access details to find symbols
 	 * that truly conflict on the same cacheline
@@ -3729,9 +3715,16 @@ static void build_symbol_associations(void)
 				
 				if (!found) {
 					if (symbol_count >= symbol_capacity) {
+						struct symbol_addr_pair *new_symbols;
 						symbol_capacity = symbol_capacity ? symbol_capacity * 2 : 4;
-						symbols_with_hitm = realloc(symbols_with_hitm, 
+						new_symbols = realloc(symbols_with_hitm,
 									    symbol_capacity * sizeof(struct symbol_addr_pair));
+						if (!new_symbols) {
+							/* Memory allocation failed, skip this symbol */
+							next_detail = rb_next(&he_detail->rb_node);
+							continue;
+						}
+						symbols_with_hitm = new_symbols;
 					}
 					if (symbols_with_hitm) {
 						symbols_with_hitm[symbol_count].sym = he_detail->ms.sym;
@@ -3753,11 +3746,13 @@ static void build_symbol_associations(void)
                     he_sym = rb_entry(nd_sym, struct hist_entry, rb_node);
                     /* Match parent entry by BOTH symbol and code address */
                     {
-                        uint64_t parent_iaddr = he_sym->mem_info ?
-                            mem_info__iaddr(he_sym->mem_info)->addr :
-                            (he_sym->ms.sym ? he_sym->ms.sym->start : 0);
+                        uint64_t parent_iaddr = 0;
+                        if (he_sym->mem_info)
+                            parent_iaddr = mem_info__iaddr(he_sym->mem_info)->addr;
+                        else if (he_sym->ms.sym)
+                            parent_iaddr = he_sym->ms.sym->start;
 
-                        if (he_sym->ms.sym == symbols_with_hitm[i].sym &&
+                        if (he_sym->ms.sym && he_sym->ms.sym == symbols_with_hitm[i].sym &&
                             parent_iaddr == symbols_with_hitm[i].iaddr) {
                             c2c_he_sym = container_of(he_sym, struct c2c_hist_entry, he);
 
@@ -3786,14 +3781,6 @@ static void build_symbol_associations(void)
                                             /* zalloc already zeros memory, no need for memset */
                                             list_add_tail(&rel_sym->list, &c2c_he_sym->related_symbols);
                                             associations_found++;
-
-                                            if (verbose > 1) {
-                                                uint64_t cl_addr = cl_address(mem_info__daddr(he_cl->mem_info)->addr, chk_double_cl);
-                                                printf("  Association: %s <-> %s (cacheline 0x%lx)\n",
-                                                       symbols_with_hitm[i].sym->name,
-                                                       symbols_with_hitm[j].sym->name,
-                                                       cl_addr);
-                                            }
                                         }
                                     }
                                 }
@@ -3816,9 +3803,7 @@ static void build_symbol_associations(void)
 		
 		free(symbols_with_hitm);
 		nd_cl = rb_next(nd_cl);
-	}
-	
-	c2c_debug1("Total symbol associations found: %d\n", associations_found);
+		}
 
 	/* Phase 2: Aggregate stats for related symbols */
 	nd_sym = rb_first_cached(&c2c.symbol_hists.hists.entries);
@@ -3881,14 +3866,6 @@ static void build_symbol_associations(void)
                 if (target_found && related_found) {
                     c2c_add_stats(&rel_sym->stats, &related_stats);
                     c2c_add_cstats(&rel_sym->cstats, &related_cstats);
-					
-					if (verbose > 2) {
-						uint64_t cl_addr = cl_address(mem_info__daddr(he_cl->mem_info)->addr, chk_double_cl);
-						printf("    Aggregating stats for %s on cacheline 0x%lx: "
-						       "rmt_hitm=%u, lcl_hitm=%u\n",
-						       rel_sym->sym->name, cl_addr,
-						       related_stats.rmt_hitm, related_stats.lcl_hitm);
-					}
 				}
 				
 				nd_cl = rb_next(nd_cl);
@@ -4098,13 +4075,6 @@ static int build_symbol_hists(void)
 
                 hists__inc_nr_samples(&c2c.symbol_hists.hists, he_sym->filtered);
                 he_sym->hpp_list = &c2c.symbol_hists.list;
-				
-				if (verbose > 2)
-					printf("Aggregated symbol %s at 0x%lx: tot_hitm=%u, lcl_hitm=%u, rmt_hitm=%u\n",
-					       entry->sym->name, entry->iaddr,
-					       entry->stats.rmt_hitm + entry->stats.lcl_hitm,
-					       entry->stats.lcl_hitm,
-					       entry->stats.rmt_hitm);
 			}
 		}
 	}
@@ -4133,19 +4103,6 @@ static int build_symbol_hists(void)
 
 	/* Build symbol associations after hists are complete */
 	build_symbol_associations();
-	
-	if (verbose) {
-		struct rb_node *nd;
-		int symbols_with_children = 0;
-		nd = rb_first_cached(&c2c.symbol_hists.hists.entries);
-		while (nd) {
-			struct hist_entry *sym_he = rb_entry(nd, struct hist_entry, rb_node);
-			if (sym_he->ms.sym && sym_he->has_children) {
-				symbols_with_children++;
-			}
-			nd = rb_next(nd);
-		}
-	}
 
 	return 0;
 }
@@ -4513,8 +4470,6 @@ static int perf_c2c__hists_browse(struct hists *hists)
     " q             Quit \n";
 
 	/* Build symbol hists */
-	if (verbose)
-		printf("Starting to build symbol hists...\n");
 	ret = build_symbol_hists();
 	if (ret) {
 		ui__error("Failed to build symbol view\n");
@@ -4562,49 +4517,24 @@ static int perf_c2c__hists_browse(struct hists *hists)
                 }
             }
             break;
-        case K_ENTER:
-        case K_RIGHT:
-            /* Disable jumping into separate cacheline view from symbol view */
-            break;
 		case 'e':
 		case '+':
 			/* Expand/collapse related symbols in symbol view */
 			if (is_symbol_view && active_browser->he_selection) {
 				struct hist_entry *he = active_browser->he_selection;
-				
-				if (verbose > 1)
-					printf("Expand/collapse key pressed for: %s (has_children=%d, unfolded=%d)\n",
-					       he->ms.sym ? he->ms.sym->name : "[unknown]",
-					       he->has_children, he->unfolded);
-				
+
 				if (he->has_children) {
 					/* Create child entries if not already done */
-					if (RB_EMPTY_ROOT(&he->hroot_out.rb_root)) {
-						if (verbose > 1)
-							printf("Creating children for: %s\n",
-							       he->ms.sym ? he->ms.sym->name : "[unknown]");
+					if (RB_EMPTY_ROOT(&he->hroot_out.rb_root))
 						populate_symbol_children(he);
-					}
 					
                     /* Toggle the folded state only if we have children */
                     if (!RB_EMPTY_ROOT(&he->hroot_out.rb_root)) {
                         he->unfolded = !he->unfolded;
-                        if (verbose > 1)
-                            printf("Symbol %s %s\n", 
-                                   he->ms.sym ? he->ms.sym->name : "[unknown]",
-                                   he->unfolded ? "expanded" : "collapsed");
                         /* Update the browser to reflect hierarchy changes */
                         c2c_browser__update_nr_entries(active_browser);
                         active_browser->b.seek(&active_browser->b, SEEK_SET, 0);
-                    } else {
-                        if (verbose)
-                            printf("Warning: No children created for %s\n",
-                                   he->ms.sym ? he->ms.sym->name : "[unknown]");
                     }
-				} else {
-					if (verbose > 1)
-						printf("Symbol %s has no related symbols\n",
-						       he->ms.sym ? he->ms.sym->name : "[unknown]");
 				}
 			}
 			break;
@@ -4883,12 +4813,21 @@ static int setup_coalesce(const char *coalesce, bool no_source)
 	if (asprintf(&c2c.cl_resort, "offset,%s", sort_str) < 0)
 		return -ENOMEM;
 
-	pr_debug("coalesce sort   fields: %s\n", c2c.cl_sort);
-	pr_debug("coalesce resort fields: %s\n", c2c.cl_resort);
-	pr_debug("coalesce output fields: %s\n", c2c.cl_output);
 	return 0;
 }
 
+/**
+ * Main entry point for c2c report command.
+ *
+ * This function handles the c2c report subcommand, which analyzes
+ * cache-to-cache transfers and false sharing between processes.
+ * It processes performance data to identify cacheline contention
+ * and provides detailed reports on cache access patterns.
+ *
+ * @param argc Number of command line arguments
+ * @param argv Array of command line arguments
+ * @return 0 on success, negative error code on failure
+ */
 static int perf_c2c__report(int argc, const char **argv)
 {
 	struct itrace_synth_opts itrace_synth_opts = {
@@ -5223,18 +5162,6 @@ static int perf_c2c__record(int argc, const char **argv)
 
 	for (j = 0; j < argc; j++, i++)
 		rec_argv[i] = argv[j];
-
-	if (verbose > 0) {
-		pr_debug("calling: ");
-
-		j = 0;
-
-		while (rec_argv[j]) {
-			pr_debug("%s ", rec_argv[j]);
-			j++;
-		}
-		pr_debug("\n");
-	}
 
 	ret = cmd_record(i, rec_argv);
 out:
