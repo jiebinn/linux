@@ -4586,9 +4586,9 @@ static int build_cl_output(char *cl_sort, bool no_source)
 						  "percent_lcl_peer," :
 						  "percent_rmt_hitm,"
 						  "percent_lcl_hitm,",
-						  "percent_stores_l1hit,"
-						  "percent_stores_l1miss,"
-						  "percent_stores_na,"
+		"percent_stores_l1hit,"
+		"percent_stores_l1miss,"
+		"percent_stores_na,"
 		"offset,offset_node,dcacheline_count,",
 		add_pid   ? "pid," : "",
 		add_tid   ? "tid," : "",
