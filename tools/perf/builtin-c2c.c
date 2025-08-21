@@ -1529,12 +1529,11 @@ node_entry(struct perf_hpp_fmt *fmt __maybe_unused, struct perf_hpp *hpp,
 	bool first = true;
 	int node;
 	int ret = 0;
+	DECLARE_BITMAP(set, c2c.cpus_cnt);
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
 	for (node = 0; node < c2c.nodes_cnt; node++) {
-		DECLARE_BITMAP(set, c2c.cpus_cnt);
-
 		bitmap_zero(set, c2c.cpus_cnt);
 		bitmap_and(set, c2c_he->cpuset, c2c.nodes[node], c2c.cpus_cnt);
 
@@ -2787,11 +2786,6 @@ static int hpp_list__parse(struct perf_hpp_list *hpp_list,
 	 * the processing a lot with big number of output
 	 * fields, so switching this off for c2c.
 	 */
-
-#if 0
-	/* and then copy output fields to sort keys */
-	perf_hpp__append_sort_keys(&hists->list);
-#endif
 
 	free(output);
 	free(sort);
@@ -4527,14 +4521,12 @@ static int perf_c2c__hists_browse(struct hists *hists)
 					/* Create child entries if not already done */
 					if (RB_EMPTY_ROOT(&he->hroot_out.rb_root))
 						populate_symbol_children(he);
-					
-                    /* Toggle the folded state only if we have children */
-                    if (!RB_EMPTY_ROOT(&he->hroot_out.rb_root)) {
-                        he->unfolded = !he->unfolded;
-                        /* Update the browser to reflect hierarchy changes */
-                        c2c_browser__update_nr_entries(active_browser);
-                        active_browser->b.seek(&active_browser->b, SEEK_SET, 0);
-                    }
+
+                    /* Toggle the folded state since we have children */
+                    he->unfolded = !he->unfolded;
+                    /* Update the browser to reflect hierarchy changes */
+                    c2c_browser__update_nr_entries(active_browser);
+                    active_browser->b.seek(&active_browser->b, SEEK_SET, 0);
 				}
 			}
 			break;
@@ -4939,13 +4931,13 @@ static int perf_c2c__report(int argc, const char **argv)
 
 	err = setup_coalesce(coalesce, no_source);
 	if (err) {
-		pr_debug("Failed to initialize hists\n");
+		pr_debug("Failed to setup coalesce parameters\n");
 		goto out_session;
 	}
 
 	err = c2c_hists__init(&c2c.hists, "dcacheline", 2, perf_session__env(session));
 	if (err) {
-		pr_debug("Failed to initialize hists\n");
+		pr_debug("Failed to initialize cacheline hists\n");
 		goto out_session;
 	}
 
