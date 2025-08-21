@@ -91,6 +91,9 @@ struct c2c_hist_entry {
 
 static char const *coalesce_default = "iaddr";
 
+/* Helper macro to get c2c_hist_entry from hist_entry */
+#define c2c_he(he) container_of(he, struct c2c_hist_entry, he)
+
 /* Structure to represent related symbols */
 struct related_symbol {
 	struct list_head	 list;
@@ -201,8 +204,6 @@ out_free:
 	return NULL;
 }
 
-
-
 /* Helper function to return empty string with proper width formatting */
 static int return_empty_string(struct perf_hpp *hpp, int width)
 {
@@ -249,7 +250,7 @@ static void c2c_he_free(void *he)
 	struct related_symbol *rel_sym, *tmp;
 	struct hist_entry *hist_entry = (struct hist_entry *)he;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	
 	/* Free child entries first */
 	free_child_entries(hist_entry);
@@ -309,7 +310,7 @@ he__get_c2c_hists(struct hist_entry *he,
 	struct c2c_hists *hists;
 	int ret;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	if (c2c_he->hists)
 		return c2c_he->hists;
 
@@ -377,6 +378,16 @@ static void compute_stats(struct c2c_hist_entry *c2c_he,
 }
 
 /* Helper function to merge two stats structures using Welford's algorithm */
+/**
+ * Merge two statistical datasets using Welford's online algorithm.
+ *
+ * This function combines two sets of statistical data (mean, variance, min, max)
+ * using Welford's algorithm for numerically stable online variance calculation.
+ * It's used for aggregating cache statistics across different symbols or cachelines.
+ *
+ * @param dest Destination stats structure to merge into
+ * @param src Source stats structure to merge from
+ */
 static void merge_stats(struct stats *dest, struct stats *src)
 {
 	double delta;
@@ -467,7 +478,7 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 	if (he == NULL)
 		goto free_mi;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	c2c_add_stats(&c2c_he->stats, &stats);
 	c2c_add_stats(&c2c_hists->stats, &stats);
 
@@ -501,7 +512,7 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 		if (he == NULL)
 			goto free_mi;
 
-		c2c_he = container_of(he, struct c2c_hist_entry, he);
+		c2c_he = c2c_he(he);
 		c2c_add_stats(&c2c_he->stats, &stats);
 		c2c_add_stats(&c2c_hists->stats, &stats);
 		c2c_add_stats(&c2c_he->node_stats[node], &stats);
@@ -682,7 +693,7 @@ dcacheline_node_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	struct c2c_hist_entry *c2c_he;
 	int width = c2c_width(fmt, hpp, he->hists);
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	if (WARN_ON_ONCE(!c2c_he->nodestr))
 		return 0;
 
@@ -696,7 +707,7 @@ dcacheline_node_count(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	struct c2c_hist_entry *c2c_he;
 	int width = c2c_width(fmt, hpp, he->hists);
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	return scnprintf(hpp->buf, hpp->size, "%*lu", width, c2c_he->paddr_cnt);
 }
 
@@ -769,7 +780,7 @@ tot_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	unsigned int tot_hitm;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	tot_hitm = c2c_he->stats.lcl_hitm + c2c_he->stats.rmt_hitm;
 
 	return scnprintf(hpp->buf, hpp->size, "%*u", width, tot_hitm);
@@ -801,7 +812,7 @@ __f ## _entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,	\
 	struct c2c_hist_entry *c2c_he;				\
 	int width = c2c_width(fmt, hpp, he->hists);		\
 								\
-	c2c_he = container_of(he, struct c2c_hist_entry, he);	\
+	c2c_he = c2c_he(he);	\
 	return scnprintf(hpp->buf, hpp->size, "%*u", width,	\
 			 c2c_he->stats.__f);			\
 }
@@ -877,7 +888,7 @@ tot_recs_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t tot_recs;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	tot_recs = total_records(&c2c_he->stats);
 
 	return scnprintf(hpp->buf, hpp->size, "%*" PRIu64, width, tot_recs);
@@ -915,7 +926,7 @@ tot_loads_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t tot_recs;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	tot_recs = total_loads(&c2c_he->stats);
 
 	return scnprintf(hpp->buf, hpp->size, "%*" PRIu64, width, tot_recs);
@@ -949,7 +960,7 @@ percent_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	double per;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	per = get_percent(c2c_he);
 
 #ifdef HAVE_SLANG_SUPPORT
@@ -1012,7 +1023,7 @@ percent_costly_snoop_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	char buf[10];
 	double per;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	per = percent_costly_snoop(c2c_he);
 	return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
 }
@@ -1046,7 +1057,7 @@ static struct c2c_stats *he_stats(struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	return &c2c_he->stats;
 }
 
@@ -1531,7 +1542,7 @@ node_entry(struct perf_hpp_fmt *fmt __maybe_unused, struct perf_hpp *hpp,
 	int ret = 0;
 	DECLARE_BITMAP(set, c2c.cpus_cnt);
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 
 	for (node = 0; node < c2c.nodes_cnt; node++) {
 		bitmap_zero(set, c2c.cpus_cnt);
@@ -1632,7 +1643,7 @@ static int									\
 __func(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp, struct hist_entry *he)	\
 {										\
 	struct c2c_hist_entry *c2c_he;						\
-	c2c_he = container_of(he, struct c2c_hist_entry, he);			\
+	c2c_he = c2c_he(he);			\
 	return mean_entry(fmt, hpp, he, avg_stats(&c2c_he->cstats.__val));	\
 }
 
@@ -1650,7 +1661,7 @@ cpucnt_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	char buf[10];
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 
 	scnprintf(buf, 10, "%d", bitmap_weight(c2c_he->cpuset, c2c.cpus_cnt));
 	return scnprintf(hpp->buf, hpp->size, "%*s", width, buf);
@@ -1664,7 +1675,7 @@ cl_idx_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	char buf[10];
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 
 	scnprintf(buf, 10, "%u", c2c_he->cacheline_idx);
 	return scnprintf(hpp->buf, hpp->size, "%*s", width, buf);
@@ -2226,7 +2237,7 @@ cycles_rmt_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t cycles;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
     cycles = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
 
     if (he->parent_he) {
@@ -2245,7 +2256,7 @@ cycles_lcl_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t cycles;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
     cycles = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
 
     if (he->parent_he) {
@@ -2265,7 +2276,7 @@ cycles_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t cycles, other_load;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
     cycles = avg_stats(&c2c_he->cstats.load) * other_load;
 
@@ -2299,7 +2310,7 @@ cycles_total_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t total_cycles;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	total_cycles = calculate_symbol_total_cycles(c2c_he);
 
     if (he->parent_he) {
@@ -2317,7 +2328,7 @@ cnt_other_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t other_load;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
 
     if (he->parent_he) {
@@ -2838,7 +2849,7 @@ static bool he__display(struct hist_entry *he, struct c2c_stats *stats)
 	if (c2c.show_all)
 		return true;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 
 	switch (c2c.display) {
 	case DISPLAY_LCL_HITM:
@@ -2869,7 +2880,7 @@ static inline bool is_valid_hist_entry(struct hist_entry *he)
 	struct c2c_hist_entry *c2c_he;
 	bool has_record = false;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 
 	/* It's a valid entry if contains stores */
 	if (c2c_he->stats.store)
@@ -2938,7 +2949,7 @@ static int filter_cb(struct hist_entry *he, void *arg __maybe_unused)
 {
 	struct c2c_hist_entry *c2c_he;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 
 	if (c2c.show_src && !he->srcline)
 		he->srcline = hist_entry__srcline(he);
@@ -2958,7 +2969,7 @@ static int resort_cl_cb(struct hist_entry *he, void *arg)
 	struct c2c_hists *c2c_hists;
 	bool display = he__display(he, &c2c.shared_clines_stats);
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	c2c_hists = c2c_he->hists;
 
 	if (display && c2c_hists) {
@@ -3069,7 +3080,7 @@ static int setup_nodes(struct perf_session *session)
 static int resort_shared_cl_cb(struct hist_entry *he, void *arg __maybe_unused)
 {
 	struct c2c_hist_entry *c2c_he;
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 
 	if (HAS_HITMS(c2c_he) || HAS_PEER(c2c_he)) {
 		c2c.shared_clines++;
@@ -3233,7 +3244,7 @@ static void print_pareto(FILE *out, struct perf_env *env)
 		if (he->filtered)
 			continue;
 
-		c2c_he = container_of(he, struct c2c_hist_entry, he);
+		c2c_he = c2c_he(he);
 		print_cacheline(c2c_he->hists, he, &hpp_list, out);
 	}
 }
@@ -3334,7 +3345,7 @@ static void populate_symbol_children(struct hist_entry *he)
 	if (!RB_EMPTY_ROOT(&root->rb_root))
 		return;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	if (!c2c_he)
 		return;
 
@@ -3344,14 +3355,12 @@ static void populate_symbol_children(struct hist_entry *he)
 		return;
 	}
 
-
-
 	/* Create child entries sorted by Store Refs (stats.store) descending */
     {
         int num_rel = 0, idx = 0, i;
         struct related_symbol **sorted = NULL;
 
-        /* Count related symbols */
+        /* Count related symbols and allocate array in one pass */
         list_for_each_entry(rel_sym, &c2c_he->related_symbols, list)
             num_rel++;
 
@@ -3362,7 +3371,7 @@ static void populate_symbol_children(struct hist_entry *he)
         if (!sorted)
             return;
 
-        /* Fill array */
+        /* Fill array in the same pass */
         list_for_each_entry(rel_sym, &c2c_he->related_symbols, list)
             sorted[idx++] = rel_sym;
 
@@ -3880,8 +3889,6 @@ static void build_symbol_associations(void)
 	}
 }
 
-
-
 /* Structure to aggregate symbol stats */
 struct symbol_entry {
 	uint64_t iaddr;
@@ -3977,7 +3984,7 @@ static int build_symbol_hists(void)
 		struct rb_node *next_cl;
 
 		he = rb_entry(next, struct hist_entry, rb_node);
-		c2c_he = container_of(he, struct c2c_hist_entry, he);
+		c2c_he = c2c_he(he);
 
 		/* Only iterate through detailed accesses to this cacheline */
 		/* Skip the cacheline's own data to avoid double-counting */
@@ -4101,8 +4108,6 @@ static int build_symbol_hists(void)
 	return 0;
 }
 
-
-
 static void c2c_browser__update_nr_entries(struct hist_browser *hb)
 {
 	u64 nr_entries = 0;
@@ -4178,7 +4183,7 @@ static int perf_c2c__browse_cacheline(struct hist_entry *he)
 	/* Display compact version first. */
 	c2c.symbol_full = false;
 
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	c2c_he = c2c_he(he);
 	c2c_hists = c2c_he->hists;
 
     /* If hists is NULL (copied entry), find the original cacheline hists by address */
@@ -4267,7 +4272,6 @@ static int perf_c2c_symbol_browser__title(struct hist_browser *browser,
 	return 0;
 }
 
-
 static struct hist_browser*
 perf_c2c_browser__new(struct hists *hists)
 {
@@ -4280,7 +4284,6 @@ perf_c2c_browser__new(struct hists *hists)
 
 	return browser;
 }
-
 
 /*
  * Browse a specific cacheline showing only entries for the parent and child symbols
