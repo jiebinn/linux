@@ -155,7 +155,7 @@ static const struct option c2c_options[] = {
 static struct perf_c2c c2c;
 
 /* Forward declaration */
-static int build_symbol_hists(void);
+static int build_symbol_hists(struct perf_env *env);
 
 /* Helper function to initialize c2c_hist_entry related_symbols */
 static void init_c2c_he_related_symbols(struct c2c_hist_entry *c2c_he)
@@ -3131,7 +3131,7 @@ static void perf_c2c__hists_fprintf(FILE *out, struct perf_session *session)
 	print_pareto(out, perf_session__env(session));
 
 	/* Add symbol view in stdio mode */
-	if (build_symbol_hists() == 0) {
+	if (build_symbol_hists(perf_session__env(session)) == 0) {
 		/* Count the number of entries */
 		int symbol_entries = 0;
 		struct rb_node *nd = rb_first_cached(&c2c.symbol_hists.hists.entries);
@@ -3775,7 +3775,7 @@ static struct symbol_entry *find_or_create_symbol_entry(uint64_t iaddr, struct s
 	return entry;
 }
 
-static int build_symbol_hists(void)
+static int build_symbol_hists(struct perf_env *env)
 {
 	struct rb_node *next = rb_first_cached(&c2c.hists.hists.entries);
 	struct hist_entry *he, *he_sym;
@@ -3790,14 +3790,14 @@ static int build_symbol_hists(void)
 	memset(symbol_hash, 0, sizeof(symbol_hash));
 
 	/* Initialize symbol hists with sort by iaddr (code address) and symbol */
-	ret = c2c_hists__init(&c2c.symbol_hists, "iaddr,symbol", 2);
+	ret = c2c_hists__init(&c2c.symbol_hists, "iaddr,symbol", 2, env);
 	if (ret)
 		return ret;
 
 	/* Setup output fields for symbol view - sorted by cycles percentage (descending) */
     ret = c2c_hists__reinit(&c2c.symbol_hists,
         "cycles_percent,total_stores,iaddr,symbol,cacheline_symbol",
-        "cycles_percent");
+        "cycles_percent", env);
 	if (ret)
 		return ret;
 
@@ -4280,7 +4280,7 @@ out:
  */
 
 
-static int perf_c2c__hists_browse(struct hists *hists)
+static int perf_c2c__hists_browse(struct hists *hists, struct perf_session *session)
 {
 	struct hist_browser *cl_browser = NULL;
 	struct hist_browser *sym_browser = NULL;
@@ -4296,7 +4296,7 @@ static int perf_c2c__hists_browse(struct hists *hists)
     " q             Quit \n";
 
 	/* Build symbol hists */
-	ret = build_symbol_hists();
+	ret = build_symbol_hists(perf_session__env(session));
 	if (ret) {
 		ui__error("Failed to build symbol view\n");
 		/* Continue with cacheline view only */
@@ -4390,7 +4390,7 @@ static void perf_c2c_display(struct perf_session *session)
 	if (use_browser == 0)
 		perf_c2c__hists_fprintf(stdout, session);
 	else
-		perf_c2c__hists_browse(&c2c.hists.hists);
+		perf_c2c__hists_browse(&c2c.hists.hists, session);
 }
 #else
 static void perf_c2c_display(struct perf_session *session)
