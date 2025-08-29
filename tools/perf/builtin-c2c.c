@@ -126,6 +126,10 @@ struct perf_c2c {
 
 	int			 display;
 
+	/* Cached total cycles across all symbols for percent column */
+	uint64_t		symbol_total_cycles;
+	bool			symbol_total_cycles_valid;
+
 	const char		*coalesce;
 	char			*cl_sort;
 	char			*cl_resort;
@@ -2170,6 +2174,10 @@ static uint64_t get_total_cycles_all_symbols(void)
 	struct rb_node *nd;
 	uint64_t total_cycles = 0;
 
+	/* Use cached value if available to avoid O(n) scan per row */
+	if (c2c.symbol_total_cycles_valid)
+		return c2c.symbol_total_cycles;
+
 	nd = rb_first_cached(&c2c.symbol_hists.hists.entries);
 	while (nd) {
 		struct hist_entry *he = rb_entry(nd, struct hist_entry, rb_node);
@@ -2178,6 +2186,9 @@ static uint64_t get_total_cycles_all_symbols(void)
 		total_cycles += calculate_symbol_total_cycles(c2c_he);
 		nd = rb_next(nd);
 	}
+
+	c2c.symbol_total_cycles = total_cycles;
+	c2c.symbol_total_cycles_valid = true;
 	return total_cycles;
 }
 
@@ -3737,7 +3748,7 @@ static struct symbol_entry *find_or_create_symbol_entry(uint64_t iaddr, struct s
 
 static int build_symbol_hists(struct perf_env *env)
 {
-	struct rb_node *next = rb_first_cached(&c2c.hists.hists.entries);
+	struct rb_node *next;
 	struct hist_entry *he, *he_sym;
 	struct c2c_hist_entry *c2c_he, *c2c_he_sym;
 	struct addr_location al;
@@ -3745,6 +3756,12 @@ static int build_symbol_hists(struct perf_env *env)
 	struct thread *synthetic_thread = NULL;
 	struct symbol_entry *entry;
 	int ret, i;
+
+	/* Invalidate cached total cycles before (re)building symbol histograms */
+	c2c.symbol_total_cycles_valid = false;
+	c2c.symbol_total_cycles = 0;
+
+	next = rb_first_cached(&c2c.hists.hists.entries);
 
 	/* Initialize symbol hash table */
 	memset(symbol_hash, 0, sizeof(symbol_hash));
@@ -3893,6 +3910,9 @@ static int build_symbol_hists(struct perf_env *env)
 
 	/* Build symbol associations after hists are complete */
 	build_symbol_associations();
+
+	/* Precompute and cache total cycles to speed up percent rendering */
+	(void)get_total_cycles_all_symbols();
 
 	return 0;
 }
