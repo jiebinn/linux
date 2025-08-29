@@ -2199,33 +2199,8 @@ cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
     c2c_he = container_of(he, struct c2c_hist_entry, he);
     symbol_cycles = calculate_symbol_total_cycles(c2c_he);
 
-    /* For child symbols, scope denominator to related cachelines (siblings under parent) */
-    if (he->parent_he) {
-        struct c2c_hist_entry *parent_c2c_he;
-        struct related_symbol *rel_sym;
-        uint64_t denom_cycles = 0;
-
-        parent_c2c_he = container_of(he->parent_he, struct c2c_hist_entry, he);
-        list_for_each_entry(rel_sym, &parent_c2c_he->related_symbols, list) {
-            uint64_t rel_cycles_rmt = avg_stats(&rel_sym->cstats.rmt_hitm) * rel_sym->stats.rmt_hitm;
-            uint64_t rel_cycles_lcl = avg_stats(&rel_sym->cstats.lcl_hitm) * rel_sym->stats.lcl_hitm;
-            uint64_t rel_other_load = rel_sym->stats.load - rel_sym->stats.rmt_hitm - rel_sym->stats.lcl_hitm;
-            uint64_t rel_cycles_load = avg_stats(&rel_sym->cstats.load) * rel_other_load;
-            denom_cycles += rel_cycles_rmt + rel_cycles_lcl + rel_cycles_load;
-        }
-
-        percent = denom_cycles ? (double)symbol_cycles / denom_cycles * 100.0 : 0.0;
-    } else {
-        total_cycles = get_total_cycles_all_symbols();
-        percent = total_cycles > 0 ? (double)symbol_cycles / total_cycles * 100.0 : 0.0;
-    }
-
-    if (he->parent_he) {
-        /* Indent child percentages by 4 spaces but preserve column width */
-        char out[32];
-        scnprintf(out, sizeof(out), "    %.2f%%", percent);
-        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
-    }
+    total_cycles = get_total_cycles_all_symbols();
+    percent = total_cycles > 0 ? (double)symbol_cycles / total_cycles * 100.0 : 0.0;
 
 	return scnprintf(hpp->buf, hpp->size, "%*.2f%%", width-1, percent);
 }
