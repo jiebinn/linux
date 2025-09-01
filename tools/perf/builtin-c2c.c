@@ -3333,11 +3333,13 @@ static void populate_symbol_children(struct hist_entry *he)
 					while (nd_d && (!found_parent || !found_child)) {
 						struct hist_entry *he_d = rb_entry(nd_d, struct hist_entry, rb_node);
 						u64 iaddr_d = he_d->mem_info ? mem_info__iaddr(he_d->mem_info)->addr : 0;
-						if (he_d->ms.sym == he->ms.sym) {
+						if (he_d->ms.sym != NULL && he->ms.sym != NULL && 
+						    strcmp(he_d->ms.sym->name, he->ms.sym->name) == 0) {
 							u64 pi = he->mem_info ? mem_info__iaddr(he->mem_info)->addr : (he->ms.sym ? he->ms.sym->start : 0);
 							if (iaddr_d == pi)
 								found_parent = true;
-						} else if (he_d->ms.sym == rel_sym->sym && iaddr_d == rel_sym->iaddr) {
+						} else if (he_d->ms.sym != NULL && rel_sym->sym != NULL && 
+							   strcmp(he_d->ms.sym->name, rel_sym->sym->name) == 0 && iaddr_d == rel_sym->iaddr) {
 							found_child = true;
 						}
 						nd_d = rb_next(&he_d->rb_node);
@@ -3385,7 +3387,8 @@ static void populate_symbol_children(struct hist_entry *he)
 								struct hist_entry *he_d2 = rb_entry(nd2, struct hist_entry, rb_node);
 								struct c2c_hist_entry *c2c_he_d2 = container_of(he_d2, struct c2c_hist_entry, he);
 								u64 iaddr2 = he_d2->mem_info ? mem_info__iaddr(he_d2->mem_info)->addr : 0;
-								if (he_d2->ms.sym == rel_sym->sym && iaddr2 == rel_sym->iaddr) {
+								if (he_d2->ms.sym != NULL && rel_sym->sym != NULL && 
+								    strcmp(he_d2->ms.sym->name, rel_sym->sym->name) == 0 && iaddr2 == rel_sym->iaddr) {
 									c2c_add_stats(&pair_stats, &c2c_he_d2->stats);
 									c2c_add_cstats(&pair_cstats, &c2c_he_d2->cstats);
 								}
@@ -3537,7 +3540,8 @@ static void build_symbol_associations(void)
 				/* Add (symbol, iaddr) pair to list if not already there */
 				bool found = false;
 				for (i = 0; i < symbol_count; i++) {
-					if (symbols_with_hitm[i].sym == he_detail->ms.sym && 
+					if (symbols_with_hitm[i].sym != NULL && he_detail->ms.sym != NULL && 
+					    strcmp(symbols_with_hitm[i].sym->name, he_detail->ms.sym->name) == 0 && 
 					    symbols_with_hitm[i].iaddr == iaddr) {
 						found = true;
 						break;
@@ -3583,7 +3587,8 @@ static void build_symbol_associations(void)
                         else if (he_sym->ms.sym)
                             parent_iaddr = he_sym->ms.sym->start;
 
-                        if (he_sym->ms.sym && he_sym->ms.sym == symbols_with_hitm[i].sym &&
+                        if (he_sym->ms.sym && symbols_with_hitm[i].sym &&
+                            strcmp(he_sym->ms.sym->name, symbols_with_hitm[i].sym->name) == 0 &&
                             parent_iaddr == symbols_with_hitm[i].iaddr) {
                             c2c_he_sym = container_of(he_sym, struct c2c_hist_entry, he);
 
@@ -3595,7 +3600,8 @@ static void build_symbol_associations(void)
 
                                     /* Check if already added (compare both sym and iaddr) */
                                     list_for_each_entry(rel_sym, &c2c_he_sym->related_symbols, list) {
-                                        if (rel_sym->sym == symbols_with_hitm[j].sym &&
+                                        if (rel_sym->sym != NULL && symbols_with_hitm[j].sym != NULL && 
+                                            strcmp(rel_sym->sym->name, symbols_with_hitm[j].sym->name) == 0 &&
                                             rel_sym->iaddr == symbols_with_hitm[j].iaddr) {
                                             exists = true;
                                             rel_sym->association_count++;
@@ -3677,12 +3683,14 @@ static void build_symbol_associations(void)
 							mem_info__iaddr(he_sym->mem_info)->addr :
 							(he_sym->ms.sym ? he_sym->ms.sym->start : 0);
 
-						if (he_detail->ms.sym == he_sym->ms.sym &&
+						if (he_detail->ms.sym != NULL && he_sym->ms.sym != NULL && 
+						    strcmp(he_detail->ms.sym->name, he_sym->ms.sym->name) == 0 &&
 						    iaddr_detail == parent_iaddr) {
 							target_found = true;
 							c2c_add_stats(&target_stats, &c2c_he_detail->stats);
 							c2c_add_cstats(&target_cstats, &c2c_he_detail->cstats);
-						} else if (he_detail->ms.sym == rel_sym->sym &&
+						} else if (he_detail->ms.sym != NULL && rel_sym->sym != NULL && 
+						           strcmp(he_detail->ms.sym->name, rel_sym->sym->name) == 0 &&
 						           iaddr_detail == rel_sym->iaddr) {
 							related_found = true;
 							c2c_add_stats(&related_stats, &c2c_he_detail->stats);
@@ -3745,7 +3753,9 @@ static struct symbol_entry *find_or_create_symbol_entry(uint64_t iaddr, struct s
 
 	/* Search for existing entry */
 	for (entry = symbol_hash[hash]; entry; entry = entry->next) {
-		if (entry->iaddr == iaddr && entry->sym == sym) {
+		if (entry->iaddr == iaddr && 
+		    entry->sym != NULL && sym != NULL && 
+		    strcmp(entry->sym->name, sym->name) == 0) {
 			return entry;
 		}
 	}
@@ -4175,7 +4185,8 @@ static int perf_c2c__browse_symbol_pair_cacheline(struct hist_entry *he_grandchi
                         /* Keep only entries matching parent or child symbols */
                         if (he_detail->ms.sym) {
                             /* Check if it matches parent symbol */
-                            if (he_parent->ms.sym && he_detail->ms.sym == he_parent->ms.sym) {
+                            if (he_parent->ms.sym && he_detail->ms.sym != NULL && 
+                                strcmp(he_detail->ms.sym->name, he_parent->ms.sym->name) == 0) {
                                 if (he_parent->mem_info && he_detail->mem_info) {
                                     u64 parent_iaddr = mem_info__iaddr(he_parent->mem_info)->addr;
                                     u64 detail_iaddr = mem_info__iaddr(he_detail->mem_info)->addr;
@@ -4185,7 +4196,8 @@ static int perf_c2c__browse_symbol_pair_cacheline(struct hist_entry *he_grandchi
                             }
 
                             /* Check if it matches child symbol */
-                            if (!keep && he_child->ms.sym && he_detail->ms.sym == he_child->ms.sym) {
+                            if (!keep && he_child->ms.sym && he_detail->ms.sym != NULL && 
+                                strcmp(he_detail->ms.sym->name, he_child->ms.sym->name) == 0) {
                                 if (he_child->mem_info && he_detail->mem_info) {
                                     u64 child_iaddr = mem_info__iaddr(he_child->mem_info)->addr;
                                     u64 detail_iaddr = mem_info__iaddr(he_detail->mem_info)->addr;
