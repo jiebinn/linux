@@ -82,6 +82,10 @@ struct c2c_hist_entry {
 	/* Symbol association support */
 	struct list_head	related_symbols;	/* Related symbols list */
 
+	/* Cached total cycles for this entry to avoid repeated calculations */
+	uint64_t		 total_cycles;
+	bool			 total_cycles_valid;
+
 	/*
 	 * must be at the end,
 	 * because of its callchain dynamic entry
@@ -166,6 +170,12 @@ static void init_c2c_he_related_symbols(struct c2c_hist_entry *c2c_he)
 	INIT_LIST_HEAD(&c2c_he->related_symbols);
 }
 
+/* Helper function to invalidate cached total cycles */
+static void c2c_he_invalidate_total_cycles_cache(struct c2c_hist_entry *c2c_he)
+{
+	c2c_he->total_cycles_valid = false;
+}
+
 static void *c2c_he_zalloc(size_t size)
 {
 	struct c2c_hist_entry *c2c_he;
@@ -194,6 +204,10 @@ static void *c2c_he_zalloc(size_t size)
 
 	/* Initialize symbol association fields */
 	init_c2c_he_related_symbols(c2c_he);
+
+	/* Initialize cached total cycles */
+	c2c_he->total_cycles = 0;
+	c2c_he->total_cycles_valid = false;
 
 	return &c2c_he->he;
 
@@ -460,6 +474,7 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	c2c_add_stats(&c2c_he->stats, &stats);
+	c2c_he_invalidate_total_cycles_cache(c2c_he);
 	c2c_add_stats(&c2c_hists->stats, &stats);
 
 	c2c_he__set_cpu(c2c_he, sample);
@@ -494,6 +509,7 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 
 		c2c_he = container_of(he, struct c2c_hist_entry, he);
 		c2c_add_stats(&c2c_he->stats, &stats);
+		c2c_he_invalidate_total_cycles_cache(c2c_he);
 		c2c_add_stats(&c2c_hists->stats, &stats);
 		c2c_add_stats(&c2c_he->node_stats[node], &stats);
 
@@ -2122,12 +2138,20 @@ static uint64_t calculate_symbol_total_cycles(struct c2c_hist_entry *c2c_he)
 {
 	uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load;
 
+	/* Return cached value if available */
+	if (c2c_he->total_cycles_valid)
+		return c2c_he->total_cycles;
+
 	cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
 	cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
 	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
 	cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
 
-	return cycles_rmt + cycles_lcl + cycles_load;
+	/* Cache the result */
+	c2c_he->total_cycles = cycles_rmt + cycles_lcl + cycles_load;
+	c2c_he->total_cycles_valid = true;
+
+	return c2c_he->total_cycles;
 }
 
 static int
