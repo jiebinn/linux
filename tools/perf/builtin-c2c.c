@@ -12,7 +12,9 @@
  */
 #include <errno.h>
 #include <inttypes.h>
+#include <stdlib.h>
 #include <linux/compiler.h>
+#include <linux/hash.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/stringify.h>
@@ -241,13 +243,11 @@ static void free_child_entries(struct hist_entry *parent_he)
 		child_c2c_he = container_of(child_he, struct c2c_hist_entry, he);
 
 		if (child_he->stat_acc) {
-			free(child_he->stat_acc);
-			child_he->stat_acc = NULL;
+			zfree(&child_he->stat_acc);
 		}
 
 		if (child_he->mem_info) {
-			free(child_he->mem_info);
-			child_he->mem_info = NULL;
+			zfree(&child_he->mem_info);
 		}
 
 		rb_erase_cached(&child_he->rb_node, &parent_he->hroot_out);
@@ -280,8 +280,7 @@ static void c2c_he_free(void *he)
 	}
 
 	if (hist_entry->parent_he && symbol_conf.cumulate_callchain && hist_entry->stat_acc) {
-		free(hist_entry->stat_acc);
-		hist_entry->stat_acc = NULL;
+		zfree(&hist_entry->stat_acc);
 	}
 
 	zfree(&c2c_he->cpuset);
@@ -3162,6 +3161,19 @@ static void perf_c2c__hists_fprintf(FILE *out, struct perf_session *session)
 
 #ifdef HAVE_SLANG_SUPPORT
 
+/* Comparison function for sorting related symbols by stats.store descending */
+static int related_symbol_cmp(const void *a, const void *b)
+{
+	const struct related_symbol *sym_a = *(const struct related_symbol **)a;
+	const struct related_symbol *sym_b = *(const struct related_symbol **)b;
+
+	if (sym_b->stats.store > sym_a->stats.store)
+		return 1;
+	else if (sym_b->stats.store < sym_a->stats.store)
+		return -1;
+	return 0;
+}
+
 /*
  * Create child hist_entry objects for related symbols
  * This enables the hierarchical display in the TUI browser
@@ -3170,7 +3182,7 @@ static void perf_c2c__hists_fprintf(FILE *out, struct perf_session *session)
 static void populate_symbol_children(struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
-    struct related_symbol *rel_sym;
+	struct related_symbol *rel_sym;
 	struct rb_root_cached *root;
 	struct rb_node **p;
 	struct rb_node *parent = NULL;
@@ -3197,52 +3209,39 @@ static void populate_symbol_children(struct hist_entry *he)
 	}
 
 	/* Create child entries sorted by Stores (stats.store) descending */
-    {
-        int num_rel = 0, idx = 0, i;
-        struct related_symbol **sorted = NULL;
+	{
+		int num_rel = 0, idx = 0, i;
+		struct related_symbol **sorted = NULL;
 
-        /* Count related symbols and allocate array in one pass */
-        list_for_each_entry(rel_sym, &c2c_he->related_symbols, list)
-            num_rel++;
+		/* Count related symbols and allocate array in one pass */
+		list_for_each_entry(rel_sym, &c2c_he->related_symbols, list)
+			num_rel++;
 
-        if (num_rel == 0)
-            return;
+		if (num_rel == 0)
+			return;
 
-        sorted = calloc(num_rel, sizeof(*sorted));
-        if (!sorted)
-            return;
+		sorted = calloc(num_rel, sizeof(*sorted));
+		if (!sorted)
+			return;
 
-        /* Fill array in the same pass */
-        list_for_each_entry(rel_sym, &c2c_he->related_symbols, list)
-            sorted[idx++] = rel_sym;
+		/* Fill array in the same pass */
+		list_for_each_entry(rel_sym, &c2c_he->related_symbols, list)
+			sorted[idx++] = rel_sym;
 
-        /* Simple selection sort by stats.store descending to avoid qsort dependency nuances */
-        for (i = 0; i < num_rel - 1; i++) {
-            int max_j = i, j;
-            for (j = i + 1; j < num_rel; j++) {
-                uint64_t a = (uint64_t)sorted[max_j]->stats.store;
-                uint64_t b = (uint64_t)sorted[j]->stats.store;
-                if (b > a)
-                    max_j = j;
-            }
-            if (max_j != i) {
-                struct related_symbol *tmp = sorted[i];
-                sorted[i] = sorted[max_j];
-                sorted[max_j] = tmp;
-            }
-        }
+		/* Sort by stats.store descending */
+		qsort(sorted, num_rel, sizeof(*sorted), related_symbol_cmp);
 
-        /* Emit children in sorted order */
-        for (i = 0; i < num_rel; i++) {
-            struct c2c_hist_entry *child_c2c_he;
-            struct hist_entry *child_he;
-            rel_sym = sorted[i];
+		/* Emit children in sorted order */
+		for (i = 0; i < num_rel; i++) {
+			struct c2c_hist_entry *child_c2c_he;
+			struct hist_entry *child_he;
+			rel_sym = sorted[i];
 
-		if (!rel_sym || !rel_sym->sym) {
-			continue;
-        }
+			if (!rel_sym || !rel_sym->sym) {
+				continue;
+			}
 
-        /* Allocate child hist_entry - simplified version for symbol children */
+			/* Allocate child hist_entry - simplified version for symbol children */
 		child_c2c_he = zalloc(sizeof(*child_c2c_he));
 		if (!child_c2c_he) {
 			continue;
@@ -3327,7 +3326,11 @@ static void populate_symbol_children(struct hist_entry *he)
 			struct rb_node *nd_cl = rb_first_cached(&c2c.hists.hists.entries);
 			struct rb_root_cached *groot = &child_he->hroot_out;
 			/* temp array to sort grandchildren by Stores */
-			struct grand_item { struct c2c_hist_entry *grand_c2c; struct hist_entry *grand_he; u64 stores; } *items = NULL;
+			struct grand_item {
+				struct c2c_hist_entry *grand_c2c;
+				struct hist_entry *grand_he;
+				u64 stores;
+			} *items = NULL;
 			int items_cnt = 0, items_cap = 0;
 			while (nd_cl) {
 				struct hist_entry *he_cl = rb_entry(nd_cl, struct hist_entry, rb_node);
@@ -3418,7 +3421,10 @@ static void populate_symbol_children(struct hist_entry *he)
 					if (items_cnt == items_cap) {
 						int new_cap = items_cap ? items_cap * 2 : 8;
 						struct grand_item *ni = realloc(items, new_cap * sizeof(*items));
-						if (!ni) { free(grand_c2c); break; }
+						if (!ni) {
+							free(grand_c2c);
+							break;
+						}
 						items = ni; items_cap = new_cap;
 					}
 					items[items_cnt].grand_c2c = grand_c2c;
@@ -3469,12 +3475,12 @@ static void populate_symbol_children(struct hist_entry *he)
 		rb_link_node(&child_he->rb_node, parent, p);
 		rb_insert_color_cached(&child_he->rb_node, root, leftmost);
 
-        count++;
+		count++;
 
-        }
+		}
 
-        free(sorted);
-    }
+		free(sorted);
+	}
 
 	/* Update parent's nr_rows to include all children */
 	if (count > 0) {
@@ -3740,7 +3746,20 @@ static struct symbol_entry *symbol_hash[SYMBOL_HASH_SIZE];
 
 static unsigned int symbol_hash_func(uint64_t iaddr, struct symbol *sym)
 {
-	return (iaddr ^ (unsigned long)sym) % SYMBOL_HASH_SIZE;
+	unsigned int name_hash = 0;
+	const char *name;
+	
+	if (!sym)
+		return hash_64(iaddr, 10);  /* log2(1024) = 10 */
+	
+	/* Use kernel's hash_32 for better string hashing */
+	name = sym->name;
+	while (*name) {
+		name_hash = hash_32(name_hash + *name, 16);
+		name++;
+	}
+	
+	return hash_64(iaddr ^ name_hash, 10);
 }
 
 static struct symbol_entry *find_or_create_symbol_entry(uint64_t iaddr, struct symbol *sym, struct map *map, struct maps *maps)
@@ -3765,8 +3784,6 @@ static struct symbol_entry *find_or_create_symbol_entry(uint64_t iaddr, struct s
 	entry->sym = sym;
 	entry->map = map;
 	entry->maps = maps;
-	memset(&entry->stats, 0, sizeof(entry->stats));
-	memset(&entry->cstats, 0, sizeof(entry->cstats));
 	entry->samples = 0;
 
 	/* Add to hash table */
