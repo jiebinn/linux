@@ -3179,293 +3179,372 @@ static int related_symbol_cmp(const void *a, const void *b)
  * This enables the hierarchical display in the TUI browser
  * Children are inserted sorted by Stores (stats.store) descending
  */
-static void populate_symbol_children(struct hist_entry *he)
+
+/*
+ * Helper function to validate and prepare for populating symbol children
+ * Returns the c2c_hist_entry if valid, NULL otherwise
+ */
+static struct c2c_hist_entry *validate_and_prepare_entries(struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
-	struct related_symbol *rel_sym;
 	struct rb_root_cached *root;
-	struct rb_node **p;
-	struct rb_node *parent = NULL;
-	bool leftmost = true;
-	int count = 0;
 
 	if (!he || !he->has_children)
-		return;
+		return NULL;
 
 	root = &he->hroot_out;
 
 	/* If already populated, return */
 	if (!RB_EMPTY_ROOT(&root->rb_root))
-		return;
+		return NULL;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	if (!c2c_he)
-		return;
+		return NULL;
 
 	/* Ensure related_symbols list is valid */
 	if (list_empty(&c2c_he->related_symbols)) {
 		he->has_children = false;  /* Reset inconsistent state */
-		return;
+		return NULL;
 	}
 
-	/* Create child entries sorted by Stores (stats.store) descending */
-	{
-		int num_rel = 0, idx = 0, i;
-		struct related_symbol **sorted = NULL;
+	return c2c_he;
+}
 
-		/* Count related symbols and allocate array in one pass */
-		list_for_each_entry(rel_sym, &c2c_he->related_symbols, list)
-			num_rel++;
+/*
+ * Helper function to sort related symbols by stores descending
+ * Returns allocated array of sorted related_symbol pointers, or NULL on error
+ * Caller must free the returned array
+ */
+static struct related_symbol **sort_related_symbols_by_stores(struct c2c_hist_entry *c2c_he, int *num_rel_out)
+{
+	struct related_symbol *rel_sym;
+	struct related_symbol **sorted = NULL;
+	int num_rel = 0, idx = 0;
 
-		if (num_rel == 0)
-			return;
+	/* Count related symbols and allocate array in one pass */
+	list_for_each_entry(rel_sym, &c2c_he->related_symbols, list)
+		num_rel++;
 
-		sorted = calloc(num_rel, sizeof(*sorted));
-		if (!sorted)
-			return;
+	if (num_rel == 0) {
+		*num_rel_out = 0;
+		return NULL;
+	}
 
-		/* Fill array in the same pass */
-		list_for_each_entry(rel_sym, &c2c_he->related_symbols, list)
-			sorted[idx++] = rel_sym;
+	sorted = calloc(num_rel, sizeof(*sorted));
+	if (!sorted) {
+		*num_rel_out = 0;
+		return NULL;
+	}
 
-		/* Sort by stats.store descending */
-		qsort(sorted, num_rel, sizeof(*sorted), related_symbol_cmp);
+	/* Fill array in the same pass */
+	list_for_each_entry(rel_sym, &c2c_he->related_symbols, list)
+		sorted[idx++] = rel_sym;
 
-		/* Emit children in sorted order */
-		for (i = 0; i < num_rel; i++) {
-			struct c2c_hist_entry *child_c2c_he;
-			struct hist_entry *child_he;
-			rel_sym = sorted[i];
+	/* Sort by stats.store descending */
+	qsort(sorted, num_rel, sizeof(*sorted), related_symbol_cmp);
 
-			if (!rel_sym || !rel_sym->sym) {
-				continue;
+	*num_rel_out = num_rel;
+	return sorted;
+}
+
+/*
+ * Helper function to create and initialize a symbol child entry
+ * Returns the created hist_entry or NULL on error
+ */
+static struct hist_entry *create_symbol_child_entry(struct hist_entry *parent_he, 
+						   struct related_symbol *rel_sym)
+{
+	struct c2c_hist_entry *child_c2c_he, *child_c2c;
+	struct hist_entry *child_he;
+
+	if (!rel_sym || !rel_sym->sym)
+		return NULL;
+
+	/* Allocate child hist_entry - simplified version for symbol children */
+	child_c2c_he = zalloc(sizeof(*child_c2c_he));
+	if (!child_c2c_he)
+		return NULL;
+
+	/* Initialize the related_symbols list */
+	init_c2c_he_related_symbols(child_c2c_he);
+
+	child_he = &child_c2c_he->he;
+
+	/* Complete initialization - copy parent's map_symbol structure first */
+	memcpy(&child_he->ms, &parent_he->ms, sizeof(struct map_symbol));
+	/* Then override the symbol and address */
+	child_he->ms.sym = rel_sym->sym;
+
+	/* Create a synthetic mem_info to store the iaddr for proper display */
+	if (parent_he->mem_info) {
+		child_he->mem_info = memdup(parent_he->mem_info, sizeof(*parent_he->mem_info));
+		if (child_he->mem_info) {
+			/* Set the instruction address to the related symbol's iaddr */
+			mem_info__iaddr(child_he->mem_info)->addr = rel_sym->iaddr;
+		}
+	}
+
+	/* Copy essential fields from parent */
+	child_he->thread = parent_he->thread;
+	child_he->cpumode = parent_he->cpumode;
+	child_he->cpu = parent_he->cpu;
+	child_he->socket = parent_he->socket;
+
+	/* Set hierarchy fields */
+	child_he->parent_he = parent_he;
+	child_he->depth = parent_he->depth + 1;
+	child_he->leaf = false; /* it can have grandchildren (cachelines) */
+	/* In symbol view, all entries should use symbol_hists */
+	child_he->hists = &c2c.symbol_hists.hists;
+	child_he->filtered = false;  /* Make sure it's not filtered out */
+	child_he->unfolded = false;
+	child_he->has_children = false; /* Will be set to true only if grandchildren are added */
+	child_he->has_no_entry = false;
+	child_he->nr_rows = 0;
+	child_he->row_offset = 0;
+
+	/* Initialize stats properly */
+	memset(&child_he->stat, 0, sizeof(child_he->stat));
+
+	/* Set stat values based on c2c stats */
+	child_he->stat.nr_events = rel_sym->stats.rmt_hitm + rel_sym->stats.lcl_hitm + 
+				   rel_sym->stats.rmt_peer + rel_sym->stats.lcl_peer;
+	child_he->stat.period = child_he->stat.nr_events;
+
+	/* These weight fields are used by some columns */
+	child_he->stat.weight1 = rel_sym->stats.rmt_hitm + rel_sym->stats.lcl_hitm;
+
+	/* Initialize stat_acc - allocate if needed */
+	if (symbol_conf.cumulate_callchain) {
+		child_he->stat_acc = calloc(1, sizeof(struct he_stat));
+		if (child_he->stat_acc)
+			memcpy(child_he->stat_acc, &child_he->stat, sizeof(struct he_stat));
+	}
+
+	/* Initialize rb trees */
+	child_he->hroot_in = RB_ROOT_CACHED;
+	child_he->hroot_out = RB_ROOT_CACHED;
+
+	/* Initialize pairs list */
+	INIT_LIST_HEAD(&child_he->pairs.node);
+
+	/* Initialize hierarchy pointers */
+	child_he->hpp_list = &c2c.symbol_hists.list;
+
+	/* Copy c2c stats - this is what c2c columns use */
+	child_c2c = container_of(child_he, struct c2c_hist_entry, he);
+	memcpy(&child_c2c->stats, &rel_sym->stats, sizeof(rel_sym->stats));
+	memcpy(&child_c2c->cstats, &rel_sym->cstats, sizeof(rel_sym->cstats));
+	init_c2c_he_related_symbols(child_c2c);
+
+	/* Build cacheline grandchildren under each related symbol child */
+	child_c2c->hists = NULL;
+
+	return child_he;
+}
+
+/*
+ * Helper function to populate cacheline grandchildren for a symbol child entry
+ * Returns the number of grandchildren created
+ */
+static int populate_cacheline_grandchildren(struct hist_entry *parent_he, 
+					   struct hist_entry *child_he,
+					   struct related_symbol *rel_sym)
+{
+	struct rb_node *nd_cl = rb_first_cached(&c2c.hists.hists.entries);
+	struct rb_root_cached *groot = &child_he->hroot_out;
+	/* temp array to sort grandchildren by Stores */
+	struct grand_item {
+		struct c2c_hist_entry *grand_c2c;
+		struct hist_entry *grand_he;
+		u64 stores;
+	} *items = NULL;
+	int items_cnt = 0, items_cap = 0;
+
+	while (nd_cl) {
+		struct hist_entry *he_cl = rb_entry(nd_cl, struct hist_entry, rb_node);
+		struct c2c_hist_entry *c2c_he_cl = container_of(he_cl, struct c2c_hist_entry, he);
+		bool found_parent = false, found_child = false;
+		
+		if (c2c_he_cl->hists && c2c_he_cl->hists->hists.entries.rb_root.rb_node) {
+			struct rb_node *nd_d = rb_first_cached(&c2c_he_cl->hists->hists.entries);
+			while (nd_d && (!found_parent || !found_child)) {
+				struct hist_entry *he_d = rb_entry(nd_d, struct hist_entry, rb_node);
+				u64 iaddr_d = he_d->mem_info ? mem_info__iaddr(he_d->mem_info)->addr : 0;
+				if (symbol_name_equal(he_d->ms.sym, parent_he->ms.sym)) {
+					u64 pi = parent_he->mem_info ? mem_info__iaddr(parent_he->mem_info)->addr : (parent_he->ms.sym ? parent_he->ms.sym->start : 0);
+					if (iaddr_d == pi)
+						found_parent = true;
+				} else if (symbol_name_equal(he_d->ms.sym, rel_sym->sym) && iaddr_d == rel_sym->iaddr) {
+					found_child = true;
+				}
+				nd_d = rb_next(&he_d->rb_node);
 			}
-
-			/* Allocate child hist_entry - simplified version for symbol children */
-		child_c2c_he = zalloc(sizeof(*child_c2c_he));
-		if (!child_c2c_he) {
-			continue;
 		}
+		
+		if (found_parent && found_child) {
+			struct c2c_hist_entry *grand_c2c = zalloc(sizeof(*grand_c2c));
+			struct hist_entry *grand_he;
+			u64 child_stores = 0;
+			
+			if (!grand_c2c)
+				break;
+			
+			init_c2c_he_related_symbols(grand_c2c);
+			grand_he = &grand_c2c->he;
+			/* copy ms from cacheline entry, but clear sym to print cacheline address */
+			memcpy(&grand_he->ms, &he_cl->ms, sizeof(struct map_symbol));
+			grand_he->ms.sym = NULL;
+			grand_he->mem_info = mem_info__get(he_cl->mem_info);
+			grand_he->thread = he_cl->thread;
+			grand_he->cpumode = he_cl->cpumode;
+			grand_he->cpu = he_cl->cpu;
+			grand_he->socket = he_cl->socket;
+			grand_he->parent_he = child_he;
+			grand_he->depth = child_he->depth + 1;
+			grand_he->leaf = true;
+			grand_he->hists = &c2c.symbol_hists.hists;
+			grand_he->filtered = false;
+			grand_he->unfolded = false;
+			grand_he->has_children = false;
+			grand_he->nr_rows = 0;
+			grand_he->row_offset = 0;
+			memset(&grand_he->stat, 0, sizeof(grand_he->stat));
+			grand_he->hroot_in = RB_ROOT_CACHED;
+			grand_he->hroot_out = RB_ROOT_CACHED;
+			INIT_LIST_HEAD(&grand_he->pairs.node);
 
-		/* Initialize the related_symbols list */
-		init_c2c_he_related_symbols(child_c2c_he);
-
-		child_he = &child_c2c_he->he;
-
-		/* Complete initialization - copy parent's map_symbol structure first */
-		memcpy(&child_he->ms, &he->ms, sizeof(struct map_symbol));
-		/* Then override the symbol and address */
-		child_he->ms.sym = rel_sym->sym;
-
-		/* Create a synthetic mem_info to store the iaddr for proper display */
-		if (he->mem_info) {
-			child_he->mem_info = memdup(he->mem_info, sizeof(*he->mem_info));
-			if (child_he->mem_info) {
-				/* Set the instruction address to the related symbol's iaddr */
-				mem_info__iaddr(child_he->mem_info)->addr = rel_sym->iaddr;
-			}
-		}
-
-		/* Copy essential fields from parent */
-		child_he->thread = he->thread;
-		child_he->cpumode = he->cpumode;
-		child_he->cpu = he->cpu;
-		child_he->socket = he->socket;
-
-		/* Set hierarchy fields */
-		child_he->parent_he = he;
-		child_he->depth = he->depth + 1;
-		child_he->leaf = false; /* it can have grandchildren (cachelines) */
-		/* In symbol view, all entries should use symbol_hists */
-		child_he->hists = &c2c.symbol_hists.hists;
-		child_he->filtered = false;  /* Make sure it's not filtered out */
-		child_he->unfolded = false;
-		child_he->has_children = false; /* Will be set to true only if grandchildren are added */
-		child_he->has_no_entry = false;
-		child_he->nr_rows = 0;
-		child_he->row_offset = 0;
-
-		/* Initialize stats properly */
-		memset(&child_he->stat, 0, sizeof(child_he->stat));
-
-		/* Set stat values based on c2c stats */
-		child_he->stat.nr_events = rel_sym->stats.rmt_hitm + rel_sym->stats.lcl_hitm + 
-					   rel_sym->stats.rmt_peer + rel_sym->stats.lcl_peer;
-		child_he->stat.period = child_he->stat.nr_events;
-
-		/* These weight fields are used by some columns */
-		child_he->stat.weight1 = rel_sym->stats.rmt_hitm + rel_sym->stats.lcl_hitm;
-
-		/* Initialize stat_acc - allocate if needed */
-		if (symbol_conf.cumulate_callchain) {
-			child_he->stat_acc = calloc(1, sizeof(struct he_stat));
-			if (child_he->stat_acc)
-				memcpy(child_he->stat_acc, &child_he->stat, sizeof(struct he_stat));
-		}
-
-		/* Initialize rb trees */
-		child_he->hroot_in = RB_ROOT_CACHED;
-		child_he->hroot_out = RB_ROOT_CACHED;
-
-		/* Initialize pairs list */
-		INIT_LIST_HEAD(&child_he->pairs.node);
-
-		/* Initialize hierarchy pointers */
-		child_he->hpp_list = &c2c.symbol_hists.list;
-
-        /* Copy c2c stats - this is what c2c columns use */
-        memcpy(&child_c2c_he->stats, &rel_sym->stats, sizeof(rel_sym->stats));
-        memcpy(&child_c2c_he->cstats, &rel_sym->cstats, sizeof(rel_sym->cstats));
-		init_c2c_he_related_symbols(child_c2c_he);
-
-		/* Build cacheline grandchildren under each related symbol child */
-		child_c2c_he->hists = NULL;
-
-		/* Populate grandchildren: cachelines where both parent symbol (he) and this related symbol accessed */
-		{
-			struct rb_node *nd_cl = rb_first_cached(&c2c.hists.hists.entries);
-			struct rb_root_cached *groot = &child_he->hroot_out;
-			/* temp array to sort grandchildren by Stores */
-			struct grand_item {
-				struct c2c_hist_entry *grand_c2c;
-				struct hist_entry *grand_he;
-				u64 stores;
-			} *items = NULL;
-			int items_cnt = 0, items_cap = 0;
-			while (nd_cl) {
-				struct hist_entry *he_cl = rb_entry(nd_cl, struct hist_entry, rb_node);
-				struct c2c_hist_entry *c2c_he_cl = container_of(he_cl, struct c2c_hist_entry, he);
-				bool found_parent = false, found_child = false;
+			/* Initialize hierarchy pointers for grandchild */
+			grand_he->hpp_list = &c2c.symbol_hists.list;
+			/* compute child-specific stats for this cacheline */
+			{
+				struct c2c_stats pair_stats = { .nr_entries = 0 };
+				struct compute_stats pair_cstats = {};
 				if (c2c_he_cl->hists && c2c_he_cl->hists->hists.entries.rb_root.rb_node) {
-					struct rb_node *nd_d = rb_first_cached(&c2c_he_cl->hists->hists.entries);
-					while (nd_d && (!found_parent || !found_child)) {
-						struct hist_entry *he_d = rb_entry(nd_d, struct hist_entry, rb_node);
-						u64 iaddr_d = he_d->mem_info ? mem_info__iaddr(he_d->mem_info)->addr : 0;
-						if (symbol_name_equal(he_d->ms.sym, he->ms.sym)) {
-							u64 pi = he->mem_info ? mem_info__iaddr(he->mem_info)->addr : (he->ms.sym ? he->ms.sym->start : 0);
-							if (iaddr_d == pi)
-								found_parent = true;
-						} else if (symbol_name_equal(he_d->ms.sym, rel_sym->sym) && iaddr_d == rel_sym->iaddr) {
-							found_child = true;
+					struct rb_node *nd2 = rb_first_cached(&c2c_he_cl->hists->hists.entries);
+					while (nd2) {
+						struct hist_entry *he_d2 = rb_entry(nd2, struct hist_entry, rb_node);
+						struct c2c_hist_entry *c2c_he_d2 = container_of(he_d2, struct c2c_hist_entry, he);
+						u64 iaddr2 = he_d2->mem_info ? mem_info__iaddr(he_d2->mem_info)->addr : 0;
+						if (symbol_name_equal(he_d2->ms.sym, rel_sym->sym) && iaddr2 == rel_sym->iaddr) {
+							c2c_add_stats(&pair_stats, &c2c_he_d2->stats);
+							c2c_add_cstats(&pair_cstats, &c2c_he_d2->cstats);
 						}
-						nd_d = rb_next(&he_d->rb_node);
+						nd2 = rb_next(&he_d2->rb_node);
 					}
 				}
-				if (found_parent && found_child) {
-					struct c2c_hist_entry *grand_c2c = zalloc(sizeof(*grand_c2c));
-					struct hist_entry *grand_he;
-					u64 child_stores = 0;
-					if (!grand_c2c)
-						break;
-					init_c2c_he_related_symbols(grand_c2c);
-					grand_he = &grand_c2c->he;
-					/* copy ms from cacheline entry, but clear sym to print cacheline address */
-					memcpy(&grand_he->ms, &he_cl->ms, sizeof(struct map_symbol));
-					grand_he->ms.sym = NULL;
-					grand_he->mem_info = mem_info__get(he_cl->mem_info);
-					grand_he->thread = he_cl->thread;
-					grand_he->cpumode = he_cl->cpumode;
-					grand_he->cpu = he_cl->cpu;
-					grand_he->socket = he_cl->socket;
-					grand_he->parent_he = child_he;
-					grand_he->depth = child_he->depth + 1;
-					grand_he->leaf = true;
-					grand_he->hists = &c2c.symbol_hists.hists;
-					grand_he->filtered = false;
-					grand_he->unfolded = false;
-					grand_he->has_children = false;
-					grand_he->nr_rows = 0;
-					grand_he->row_offset = 0;
-					memset(&grand_he->stat, 0, sizeof(grand_he->stat));
-					grand_he->hroot_in = RB_ROOT_CACHED;
-					grand_he->hroot_out = RB_ROOT_CACHED;
-					INIT_LIST_HEAD(&grand_he->pairs.node);
+				memcpy(&grand_c2c->stats, &pair_stats, sizeof(grand_c2c->stats));
+				memcpy(&grand_c2c->cstats, &pair_cstats, sizeof(grand_c2c->cstats));
+				child_stores = pair_stats.store;
+			}
+			/* stats for columns alignment */
+			grand_he->stat.nr_events = grand_c2c->stats.lcl_hitm + grand_c2c->stats.rmt_hitm +
+						grand_c2c->stats.lcl_peer + grand_c2c->stats.rmt_peer;
+			grand_he->stat.period = grand_he->stat.nr_events;
+			grand_he->stat.weight1 = grand_c2c->stats.rmt_hitm + grand_c2c->stats.lcl_hitm;
 
-					/* Initialize hierarchy pointers for grandchild */
-					grand_he->hpp_list = &c2c.symbol_hists.list;
-					/* compute child-specific stats for this cacheline */
-					{
-						struct c2c_stats pair_stats = { .nr_entries = 0 };
-						struct compute_stats pair_cstats = {};
-						if (c2c_he_cl->hists && c2c_he_cl->hists->hists.entries.rb_root.rb_node) {
-							struct rb_node *nd2 = rb_first_cached(&c2c_he_cl->hists->hists.entries);
-							while (nd2) {
-								struct hist_entry *he_d2 = rb_entry(nd2, struct hist_entry, rb_node);
-								struct c2c_hist_entry *c2c_he_d2 = container_of(he_d2, struct c2c_hist_entry, he);
-								u64 iaddr2 = he_d2->mem_info ? mem_info__iaddr(he_d2->mem_info)->addr : 0;
-								if (symbol_name_equal(he_d2->ms.sym, rel_sym->sym) && iaddr2 == rel_sym->iaddr) {
-									c2c_add_stats(&pair_stats, &c2c_he_d2->stats);
-									c2c_add_cstats(&pair_cstats, &c2c_he_d2->cstats);
-								}
-								nd2 = rb_next(&he_d2->rb_node);
-							}
-						}
-						memcpy(&grand_c2c->stats, &pair_stats, sizeof(grand_c2c->stats));
-						memcpy(&grand_c2c->cstats, &pair_cstats, sizeof(grand_c2c->cstats));
-						child_stores = pair_stats.store;
-					}
-					/* stats for columns alignment */
-					grand_he->stat.nr_events = grand_c2c->stats.lcl_hitm + grand_c2c->stats.rmt_hitm +
-								grand_c2c->stats.lcl_peer + grand_c2c->stats.rmt_peer;
-					grand_he->stat.period = grand_he->stat.nr_events;
-					grand_he->stat.weight1 = grand_c2c->stats.rmt_hitm + grand_c2c->stats.lcl_hitm;
+			/* Initialize stat_acc for grandchild if needed */
+			if (symbol_conf.cumulate_callchain) {
+				grand_he->stat_acc = calloc(1, sizeof(struct he_stat));
+				if (grand_he->stat_acc)
+					memcpy(grand_he->stat_acc, &grand_he->stat, sizeof(struct he_stat));
+			}
 
-					/* Initialize stat_acc for grandchild if needed */
-					if (symbol_conf.cumulate_callchain) {
-						grand_he->stat_acc = calloc(1, sizeof(struct he_stat));
-						if (grand_he->stat_acc)
-							memcpy(grand_he->stat_acc, &grand_he->stat, sizeof(struct he_stat));
-					}
-
-					/* push into temp array */
-					if (items_cnt == items_cap) {
-						int new_cap = items_cap ? items_cap * 2 : 8;
-						struct grand_item *ni = realloc(items, new_cap * sizeof(*items));
-						if (!ni) {
-							free(grand_c2c);
-							break;
-						}
-						items = ni; items_cap = new_cap;
-					}
-					items[items_cnt].grand_c2c = grand_c2c;
-					items[items_cnt].grand_he = grand_he;
-					items[items_cnt].stores = child_stores;
-					items_cnt++;
+			/* push into temp array */
+			if (items_cnt == items_cap) {
+				int new_cap = items_cap ? items_cap * 2 : 8;
+				struct grand_item *ni = realloc(items, new_cap * sizeof(*items));
+				if (!ni) {
+					free(grand_c2c);
+					break;
 				}
-				nd_cl = rb_next(nd_cl);
+				items = ni; items_cap = new_cap;
 			}
-			/* sort by stores desc (simple selection sort) */
-			for (int a = 0; a < items_cnt - 1; a++) {
-				int maxj = a;
-				for (int b = a + 1; b < items_cnt; b++)
-					if (items[b].stores > items[maxj].stores)
-						maxj = b;
-				if (maxj != a) {
-					struct grand_item tmp = items[a];
-					items[a] = items[maxj];
-					items[maxj] = tmp;
-				}
-			}
-			/* insert in order */
-			for (int a = 0; a < items_cnt; a++) {
-				p = &groot->rb_root.rb_node;
-				parent = NULL;
-				leftmost = true;
-				while (*p != NULL) { parent = *p; p = &parent->rb_right; leftmost = false; }
-				rb_link_node(&items[a].grand_he->rb_node, parent, p);
-				rb_insert_color_cached(&items[a].grand_he->rb_node, groot, leftmost);
-			}
-			/* mark child has_children only if any grandchildren were added */
-			child_he->has_children = items_cnt > 0;
-			if (items_cnt > 0) {
-				/* Update nr_rows to include grandchildren count */
-				child_he->nr_rows = items_cnt;
-			}
-			free(items);
+			items[items_cnt].grand_c2c = grand_c2c;
+			items[items_cnt].grand_he = grand_he;
+			items[items_cnt].stores = child_stores;
+			items_cnt++;
 		}
+		nd_cl = rb_next(nd_cl);
+	}
+	
+	/* sort by stores desc (simple selection sort) */
+	for (int a = 0; a < items_cnt - 1; a++) {
+		int maxj = a;
+		for (int b = a + 1; b < items_cnt; b++)
+			if (items[b].stores > items[maxj].stores)
+				maxj = b;
+		if (maxj != a) {
+			struct grand_item tmp = items[a];
+			items[a] = items[maxj];
+			items[maxj] = tmp;
+		}
+	}
+	
+	/* insert in order */
+	for (int a = 0; a < items_cnt; a++) {
+		struct rb_node **p = &groot->rb_root.rb_node;
+		struct rb_node *parent = NULL;
+		bool leftmost = true;
+		while (*p != NULL) { 
+			parent = *p; 
+			p = &parent->rb_right; 
+			leftmost = false; 
+		}
+		rb_link_node(&items[a].grand_he->rb_node, parent, p);
+		rb_insert_color_cached(&items[a].grand_he->rb_node, groot, leftmost);
+	}
+	
+	/* mark child has_children only if any grandchildren were added */
+	child_he->has_children = items_cnt > 0;
+	if (items_cnt > 0) {
+		/* Update nr_rows to include grandchildren count */
+		child_he->nr_rows = items_cnt;
+	}
+	
+	free(items);
+	return items_cnt;
+}
 
-		/* Simple insertion - always insert on the right (avoid complex sorting for now) */
+static void populate_symbol_children(struct hist_entry *he)
+{
+	struct c2c_hist_entry *c2c_he;
+	struct related_symbol **sorted;
+	struct rb_root_cached *root;
+	struct rb_node **p, *parent;
+	bool leftmost;
+	int count = 0, num_rel, i;
+
+	/* Validate and prepare entries */
+	c2c_he = validate_and_prepare_entries(he);
+	if (!c2c_he)
+		return;
+
+	root = &he->hroot_out;
+
+	/* Sort related symbols by stores descending */
+	sorted = sort_related_symbols_by_stores(c2c_he, &num_rel);
+	if (!sorted)
+		return;
+
+	/* Create and populate child entries */
+	for (i = 0; i < num_rel; i++) {
+		struct hist_entry *child_he;
+		struct related_symbol *rel_sym = sorted[i];
+
+		/* Create child entry */
+		child_he = create_symbol_child_entry(he, rel_sym);
+		if (!child_he)
+			continue;
+
+		/* Populate grandchildren (cachelines) */
+		populate_cacheline_grandchildren(he, child_he, rel_sym);
+
+		/* Insert child into the parent's tree */
 		p = &root->rb_root.rb_node;
+		parent = NULL;
+		leftmost = true;
 		while (*p != NULL) {
 			parent = *p;
 			p = &parent->rb_right;
@@ -3476,13 +3555,11 @@ static void populate_symbol_children(struct hist_entry *he)
 		rb_insert_color_cached(&child_he->rb_node, root, leftmost);
 
 		count++;
-
-		}
-
-		free(sorted);
 	}
 
-	/* Update parent's nr_rows to include all children */
+	free(sorted);
+
+	/* Update parent's nr_rows and has_children flag */
 	if (count > 0) {
 		he->nr_rows = count;
 		he->has_children = true;
