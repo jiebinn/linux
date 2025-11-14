@@ -377,17 +377,7 @@ static void compute_stats(struct c2c_hist_entry *c2c_he,
 		update_stats(&cstats->load, weight);
 }
 
-/* Helper function to merge two stats structures using Welford's algorithm */
-/**
- * Merge two statistical datasets using Welford's online algorithm.
- *
- * This function combines two sets of statistical data (mean, variance, min, max)
- * using Welford's algorithm for numerically stable online variance calculation.
- * It's used for aggregating cache statistics across different symbols or cachelines.
- *
- * @param dest Destination stats structure to merge into
- * @param src Source stats structure to merge from
- */
+/* Helper function to merge two stats structures */
 static void merge_stats(struct stats *dest, struct stats *src)
 {
 	double delta;
@@ -400,7 +390,6 @@ static void merge_stats(struct stats *dest, struct stats *src)
 		return;
 	}
 
-	/* Welford's algorithm for merging online statistics */
 	delta = src->mean - dest->mean;
 	dest->M2 += src->M2 + delta * delta * dest->n * src->n / (dest->n + src->n);
 	dest->mean = (dest->mean * dest->n + src->mean * src->n) / (dest->n + src->n);
@@ -617,7 +606,7 @@ static int c2c_header(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	struct c2c_dimension *dim;
 	const char *text = NULL;
 	int width = c2c_width(fmt, hpp, hists);
-	/* Center align the header text - declare all variables first for C90 compliance */
+	/* Center align the header text */
 	int text_len;
 	int padding;
 	int left_pad;
@@ -1256,6 +1245,37 @@ percent_rmt_peer_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 }
 
 static int
+percent_stores_l1hit_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+			   struct hist_entry *he)
+{
+	int width = c2c_width(fmt, hpp, he->hists);
+	double per = PERCENT(he, st_l1hit);
+	char buf[10];
+
+	return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
+}
+
+static int
+percent_stores_l1hit_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+			   struct hist_entry *he)
+{
+	return percent_color(fmt, hpp, he, percent_st_l1hit);
+}
+
+static int64_t
+percent_stores_l1hit_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
+			struct hist_entry *left, struct hist_entry *right)
+{
+	double per_left;
+	double per_right;
+
+	per_left  = PERCENT(left, st_l1hit);
+	per_right = PERCENT(right, st_l1hit);
+
+	return per_left - per_right;
+}
+
+static int
 total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
                    struct hist_entry *he)
 {
@@ -1747,22 +1767,47 @@ static struct c2c_dimension dim_cl_stores_l1hit = {
 	.header		= HEADER_SPAN("------- Store Refs ------", "L1 Hit", 2),
 	.name		= "cl_stores_l1hit",
 	.cmp		= st_l1hit_cmp,
-	.entry		= percent_cl_stores_l1hit_entry,
-	.color		= percent_cl_stores_l1hit_color,
+	.entry		= st_l1hit_entry,
 	.width		= 7,
 };
 
 static struct c2c_dimension dim_cl_stores_l1miss = {
 	.header		= HEADER_SPAN_LOW("L1 Miss"),
 	.name		= "cl_stores_l1miss",
-	.cmp		= percent_stores_l1miss_cmp,
-	.entry		= percent_cl_stores_l1miss_entry,
+	.cmp		= st_l1miss_cmp,
+	.entry		= st_l1miss_entry,
 	.width		= 7,
 };
 
 static struct c2c_dimension dim_cl_stores_na = {
 	.header		= HEADER_SPAN_LOW("N/A"),
 	.name		= "cl_stores_na",
+	.cmp		= st_na_cmp,
+	.entry		= st_na_entry,
+	.width		= 7,
+};
+
+/* New percentage versions for cacheline view */
+static struct c2c_dimension dim_percent_cl_stores_l1hit = {
+	.header		= HEADER_SPAN("------ Store Refs % -----", "L1 Hit", 2),
+	.name		= "percent_cl_stores_l1hit",
+	.cmp		= st_l1hit_cmp,
+	.entry		= percent_cl_stores_l1hit_entry,
+	.color		= percent_cl_stores_l1hit_color,
+	.width		= 7,
+};
+
+static struct c2c_dimension dim_percent_cl_stores_l1miss = {
+	.header		= HEADER_SPAN_LOW("L1 Miss"),
+	.name		= "percent_cl_stores_l1miss",
+	.cmp		= percent_stores_l1miss_cmp,
+	.entry		= percent_cl_stores_l1miss_entry,
+	.width		= 7,
+};
+
+static struct c2c_dimension dim_percent_cl_stores_na = {
+	.header		= HEADER_SPAN_LOW("N/A"),
+	.name		= "percent_cl_stores_na",
 	.cmp		= percent_stores_na_cmp,
 	.entry		= percent_cl_stores_na_entry,
 	.width		= 7,
@@ -1777,7 +1822,7 @@ static struct c2c_dimension dim_ld_fbhit = {
 };
 
 static struct c2c_dimension dim_ld_l1hit = {
-	.header		= HEADER_SPAN_LOW("L1 Load"),
+	.header		= HEADER_SPAN_LOW("L1"),
 	.name		= "ld_l1hit",
 	.cmp		= ld_l1hit_cmp,
 	.entry		= ld_l1hit_entry,
@@ -1785,7 +1830,7 @@ static struct c2c_dimension dim_ld_l1hit = {
 };
 
 static struct c2c_dimension dim_ld_l2hit = {
-	.header		= HEADER_SPAN_LOW("L2 Load"),
+	.header		= HEADER_SPAN_LOW("L2"),
 	.name		= "ld_l2hit",
 	.cmp		= ld_l2hit_cmp,
 	.entry		= ld_l2hit_entry,
@@ -1875,7 +1920,14 @@ static struct c2c_dimension dim_percent_lcl_peer = {
 	.width		= 7,
 };
 
-
+static struct c2c_dimension dim_percent_stores_l1hit = {
+	.header		= HEADER_SPAN("------- Store Refs ------", "L1 Hit", 2),
+	.name		= "percent_stores_l1hit",
+	.cmp		= percent_stores_l1hit_cmp,
+	.entry		= percent_stores_l1hit_entry,
+	.color		= percent_stores_l1hit_color,
+	.width		= 7,
+};
 
 static struct c2c_dimension dim_percent_stores_l1miss = {
 	.header		= HEADER_SPAN_LOW("L1 Miss"),
@@ -2409,6 +2461,9 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_cl_stores_l1hit,
 	&dim_cl_stores_l1miss,
 	&dim_cl_stores_na,
+	&dim_percent_cl_stores_l1hit,
+	&dim_percent_cl_stores_l1miss,
+	&dim_percent_cl_stores_na,
 	&dim_ld_fbhit,
 	&dim_ld_l1hit,
 	&dim_ld_l2hit,
@@ -2421,6 +2476,7 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_percent_lcl_hitm,
 	&dim_percent_rmt_peer,
 	&dim_percent_lcl_peer,
+	&dim_percent_stores_l1hit,
 	&dim_percent_stores_l1miss,
 	&dim_percent_stores_na,
 	&dim_total_stores,
