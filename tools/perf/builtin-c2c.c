@@ -3230,11 +3230,23 @@ static int related_symbol_cmp(const void *a, const void *b)
 	return 0;
 }
 
-/*
- * Create child hist_entry objects for related symbols
- * This enables the hierarchical display in the TUI browser
- * Children are inserted sorted by Stores (stats.store) descending
- */
+struct grand_item {
+	struct c2c_hist_entry *grand_c2c;
+	struct hist_entry *grand_he;
+	u64 stores;
+};
+
+static int grand_item_cmp(const void *a, const void *b)
+{
+	const struct grand_item *item_a = (const struct grand_item *)a;
+	const struct grand_item *item_b = (const struct grand_item *)b;
+
+	if (item_b->stores > item_a->stores)
+		return 1;
+	else if (item_b->stores < item_a->stores)
+		return -1;
+	return 0;
+}
 
 /*
  * Helper function to validate and prepare for populating symbol children
@@ -3541,13 +3553,10 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 {
 	struct rb_root_cached *groot = &child_he->hroot_out;
 	/* temp array to sort grandchildren by Stores */
-	struct grand_item {
-		struct c2c_hist_entry *grand_c2c;
-		struct hist_entry *grand_he;
-		u64 stores;
-	} *items = NULL;
+	struct grand_item *items = NULL;
+
 	int items_cnt = 0, items_cap = 0;
-	u64 parent_iaddr = parent_he->mem_info ? mem_info__iaddr(parent_he->mem_info)->addr : 
+	u64 parent_iaddr = parent_he->mem_info ? mem_info__iaddr(parent_he->mem_info)->addr :
 			   (parent_he->ms.sym ? parent_he->ms.sym->start : 0);
 
 	/* Use the pre-built index instead of traversing all cachelines */
@@ -3635,20 +3644,10 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 			items_cnt++;
 		}
 	}
-	
-	/* sort by stores desc (simple selection sort) */
-	for (int a = 0; a < items_cnt - 1; a++) {
-		int maxj = a;
-		for (int b = a + 1; b < items_cnt; b++)
-			if (items[b].stores > items[maxj].stores)
-				maxj = b;
-		if (maxj != a) {
-			struct grand_item tmp = items[a];
-			items[a] = items[maxj];
-			items[maxj] = tmp;
-		}
-	}
-	
+
+	/* sort by stores desc using qsort */
+	qsort(items, items_cnt, sizeof(struct grand_item), grand_item_cmp);
+
 	/* insert in order */
 	for (int a = 0; a < items_cnt; a++) {
 		struct rb_node **p = &groot->rb_root.rb_node;
@@ -3662,14 +3661,14 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 		rb_link_node(&items[a].grand_he->rb_node, parent, p);
 		rb_insert_color_cached(&items[a].grand_he->rb_node, groot, leftmost);
 	}
-	
+
 	/* mark child has_children only if any grandchildren were added */
 	child_he->has_children = items_cnt > 0;
 	if (items_cnt > 0) {
 		/* Update nr_rows to include grandchildren count */
 		child_he->nr_rows = items_cnt;
 	}
-	
+
 	free(items);
 	return items_cnt;
 }
@@ -3884,7 +3883,7 @@ static void build_symbol_associations(void)
 		}
 
 		free(symbols_with_hitm);
-		}
+	}
 
 	/* Phase 2: Aggregate stats for related symbols using cached index */
 	nd_sym = rb_first_cached(&c2c.symbol_hists.hists.entries);
