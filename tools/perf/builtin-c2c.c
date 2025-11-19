@@ -108,7 +108,6 @@ struct related_symbol {
 	uint64_t		iaddr;			/* Code address */
 	struct c2c_stats	stats;			/* Aggregated stats */
 	struct compute_stats	cstats;			/* Compute stats */
-	int			association_count;	/* Shared cachelines count */
 };
 
 struct perf_c2c {
@@ -639,11 +638,11 @@ static int c2c_header(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	} else {
 		padding = width - text_len;
 		left_pad = padding / 2;
-		
+
 		/* Create centered text with proper spacing */
-		snprintf(centered_text, sizeof(centered_text), "%*s%s%*s", 
+		snprintf(centered_text, sizeof(centered_text), "%*s%s%*s",
 			left_pad, "", text, padding - left_pad, "");
-		
+
 		return scnprintf(hpp->buf, hpp->size, "%-*s", width, centered_text);
 	}
 }
@@ -743,12 +742,14 @@ iaddr_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	if (he->mem_info)
 		addr = mem_info__iaddr(he->mem_info)->addr;
 
-    if (he->parent_he) {
-        /* Indent child addresses */
-        char out[40];
-        scnprintf(out, sizeof(out), "    %s", HEX_STR(buf, addr));
-        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
-    }
+	if (he->parent_he) {
+		/* Indent child addresses */
+		char *hex_str = HEX_STR(buf, addr);
+		int out_len = snprintf(NULL, 0, "    %s", hex_str) + 1;
+		char *out = alloca(out_len);
+		snprintf(out, out_len, "    %s", hex_str);
+		return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+	}
 
 	return scnprintf(hpp->buf, hpp->size, "%-*s", width, HEX_STR(buf, addr));
 }
@@ -1276,33 +1277,25 @@ percent_stores_l1hit_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 
 static int
 total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-                   struct hist_entry *he)
+		   struct hist_entry *he)
 {
-    struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
-    /* Use stats.store as authoritative total stores */
-    uint64_t total = (uint64_t)c2c_he->stats.store;
-    int width = c2c_width(fmt, hpp, he->hists);
+	struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
+	/* Use stats.store as authoritative total stores */
+	uint64_t total = (uint64_t)c2c_he->stats.store;
+	int width = c2c_width(fmt, hpp, he->hists);
 
 	/* Hide Stores for parent symbols */
 	if (!he->parent_he) {
 		return scnprintf(hpp->buf, hpp->size, "%-*s", width, "");
+	} else {
+		/* Calculate space needed and format directly */
+		const char *indent = he->parent_he->parent_he ? "        " : "      ";
+		int out_len = snprintf(NULL, 0, "%s%" PRIu64, indent, total) + 1;
+		char *out = alloca(out_len);
+
+		snprintf(out, out_len, "%s%" PRIu64, indent, total);
+		return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
 	}
-
-    if (he->parent_he) {
-        char out[32];
-        char num[24];
-        scnprintf(num, sizeof(num), "%" PRIu64, total);
-
-        /* Consistent indentation with symbol hierarchy */
-        if (he->parent_he->parent_he) {
-            scnprintf(out, sizeof(out), "        %s", num);  /* 8 spaces for grandchildren */
-        } else {
-            scnprintf(out, sizeof(out), "      %s", num);  /* 6 spaces for children */
-        }
-        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
-    }
-
-    return scnprintf(hpp->buf, hpp->size, "%-*" PRIu64, width, total);
 }
 
 static int
@@ -1947,47 +1940,49 @@ static struct c2c_dimension dim_percent_stores_na = {
 };
 
 static struct c2c_dimension dim_total_stores = {
-    .header     = HEADER_LOW("Stores"),
-    .name       = "total_stores",
-    .cmp        = store_cmp,
-    .entry      = total_stores_entry,
-    .width      = 14,
+	.header		= HEADER_LOW("Stores"),
+	.name		= "total_stores",
+	.cmp		= store_cmp,
+	.entry		= total_stores_entry,
+	.width		= 14,
 };
 
 /* Cacheline entry for symbol view */
 static int
 cacheline_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-                       struct hist_entry *he)
+		       struct hist_entry *he)
 {
-    uint64_t addr = 0;
-    int width = c2c_width(fmt, hpp, he->hists);
-    char buf[20];
-    char out[40];
+	uint64_t addr = 0;
+	int width = c2c_width(fmt, hpp, he->hists);
+	char buf[20];
 
-    /* Only display for cacheline entries - these are leaf nodes under related symbols */
-    if (he->depth < 2 || !he->leaf) {
-        return scnprintf(hpp->buf, hpp->size, "%-*s", width, "");
-    }
+	/* Only display for cacheline entries - these are leaf nodes under related symbols */
+	if (he->depth < 2 || !he->leaf) {
+		return scnprintf(hpp->buf, hpp->size, "%-*s", width, "");
+	}
 
-    if (he->mem_info)
-        addr = cl_address(mem_info__daddr(he->mem_info)->addr, chk_double_cl);
+	if (he->mem_info)
+		addr = cl_address(mem_info__daddr(he->mem_info)->addr, chk_double_cl);
 
-    /* Indent cacheline under child symbols to emphasize hierarchy */
-    if (he->parent_he && he->parent_he->parent_he) {
-        scnprintf(out, sizeof(out), "    %s", HEX_STR(buf, addr));
-        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
-    }
+	/* Indent cacheline under child symbols to emphasize hierarchy */
+	if (he->parent_he && he->parent_he->parent_he) {
+		char *hex_str = HEX_STR(buf, addr);
+		int out_len = snprintf(NULL, 0, "    %s", hex_str) + 1;
+		char *out = alloca(out_len);
+		snprintf(out, out_len, "    %s", hex_str);
+		return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+	}
 
-    return scnprintf(hpp->buf, hpp->size, "%-*s", width, HEX_STR(buf, addr));
+	return scnprintf(hpp->buf, hpp->size, "%-*s", width, HEX_STR(buf, addr));
 }
 
 /* Cacheline column for symbol view */
 static struct c2c_dimension dim_cacheline_symbol = {
-    .header     = HEADER_LOW("Cacheline"),
-    .name       = "cacheline_symbol",
-    .cmp        = dcacheline_cmp,
-    .entry      = cacheline_symbol_entry,
-    .width      = 18,
+	.header		= HEADER_LOW("Cacheline"),
+	.name		= "cacheline_symbol",
+	.cmp		= dcacheline_cmp,
+	.entry		= cacheline_symbol_entry,
+	.width		= 18,
 };
 
 static struct c2c_dimension dim_dram_lcl = {
@@ -2050,7 +2045,7 @@ symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	} else if (he->parent_he) {
 		/* Child entries (depth 1) */
 		if (he->has_children) {
-			snprintf(buf, sizeof(buf), "    %c %s", 
+			snprintf(buf, sizeof(buf), "    %c %s",
 				 he->unfolded ? '-' : '+', symname);
 		} else {
 			snprintf(buf, sizeof(buf), "      %s", symname);
@@ -2058,7 +2053,7 @@ symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	} else {
 		/* Top-level entries (depth 0) */
 		if (he->has_children) {
-			snprintf(buf, sizeof(buf), "%c %s", 
+			snprintf(buf, sizeof(buf), "%c %s",
 				 he->unfolded ? '-' : '+', symname);
 		} else {
 			snprintf(buf, sizeof(buf), "  %s", symname);
@@ -2133,18 +2128,18 @@ cycles_rmt_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		      struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
-    int width = c2c_width(fmt, hpp, he->hists);
+	int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t cycles;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
-    cycles = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
+	cycles = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
 
-    if (he->parent_he) {
-        /* Indent child metrics by 4 spaces */
-        return scnprintf(hpp->buf, hpp->size, "    %llu", cycles);
-    }
+	if (he->parent_he) {
+		/* Indent child metrics by 4 spaces */
+		return scnprintf(hpp->buf, hpp->size, "    %llu", cycles);
+	}
 
-    return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
+	return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
 }
 
 static int
@@ -2152,19 +2147,20 @@ cycles_lcl_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		      struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
-    int width = c2c_width(fmt, hpp, he->hists);
+	int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t cycles;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
-    cycles = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
+	cycles = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
 
-    if (he->parent_he) {
-        char out[48];
-        scnprintf(out, sizeof(out), "    %llu", cycles);
-        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
-    }
+	if (he->parent_he) {
+		int out_len = snprintf(NULL, 0, "    %lu", cycles) + 1;
+		char *out = alloca(out_len);
+		snprintf(out, out_len, "    %lu", cycles);
+		return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+	}
 
-    return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
+	return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
 }
 
 static int
@@ -2172,20 +2168,21 @@ cycles_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		  struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
-    int width = c2c_width(fmt, hpp, he->hists);
+	int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t cycles, other_load;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
-    cycles = avg_stats(&c2c_he->cstats.load) * other_load;
+	cycles = avg_stats(&c2c_he->cstats.load) * other_load;
 
-    if (he->parent_he) {
-        char out[48];
-        scnprintf(out, sizeof(out), "    %llu", cycles);
-        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
-    }
+	if (he->parent_he) {
+		int out_len = snprintf(NULL, 0, "    %lu", cycles) + 1;
+		char *out = alloca(out_len);
+		snprintf(out, out_len, "    %lu", cycles);
+		return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+	}
 
-    return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
+	return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
 }
 
 /* Helper function to calculate total cycles for a single c2c_hist_entry */
@@ -2214,17 +2211,17 @@ cycles_total_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		   struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
-    int width = c2c_width(fmt, hpp, he->hists);
+	int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t total_cycles;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	total_cycles = calculate_symbol_total_cycles(c2c_he);
 
-    if (he->parent_he) {
-        return scnprintf(hpp->buf, hpp->size, "    %llu", total_cycles);
-    }
+	if (he->parent_he) {
+		return scnprintf(hpp->buf, hpp->size, "    %llu", total_cycles);
+	}
 
-    return scnprintf(hpp->buf, hpp->size, "%*llu", width, total_cycles);
+	return scnprintf(hpp->buf, hpp->size, "%*llu", width, total_cycles);
 }
 
 static int
@@ -2232,19 +2229,20 @@ cnt_other_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		     struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
-    int width = c2c_width(fmt, hpp, he->hists);
+	int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t other_load;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
 
-    if (he->parent_he) {
-        char out[48];
-        scnprintf(out, sizeof(out), "    %llu", other_load);
-        return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
-    }
+	if (he->parent_he) {
+		int out_len = snprintf(NULL, 0, "    %lu", other_load) + 1;
+		char *out = alloca(out_len);
+		snprintf(out, out_len, "    %lu", other_load);
+		return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+	}
 
-    return scnprintf(hpp->buf, hpp->size, "%*llu", width, other_load);
+	return scnprintf(hpp->buf, hpp->size, "%*llu", width, other_load);
 }
 
 /* Function to calculate total cycles for all symbols for percentage calculation */
@@ -2286,11 +2284,11 @@ cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
 	}
 
-    c2c_he = container_of(he, struct c2c_hist_entry, he);
-    symbol_cycles = calculate_symbol_total_cycles(c2c_he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	symbol_cycles = calculate_symbol_total_cycles(c2c_he);
 
-    total_cycles = get_total_cycles_all_symbols();
-    percent = total_cycles > 0 ? (double)symbol_cycles / total_cycles * 100.0 : 0.0;
+	total_cycles = get_total_cycles_all_symbols();
+	percent = total_cycles > 0 ? (double)symbol_cycles / total_cycles * 100.0 : 0.0;
 
 	return scnprintf(hpp->buf, hpp->size, "%*.2f%%", width-1, percent);
 }
@@ -3319,7 +3317,7 @@ static struct related_symbol **sort_related_symbols_by_stores(struct c2c_hist_en
  * Helper function to create and initialize a symbol child entry
  * Returns the created hist_entry or NULL on error
  */
-static struct hist_entry *create_symbol_child_entry(struct hist_entry *parent_he, 
+static struct hist_entry *create_symbol_child_entry(struct hist_entry *parent_he,
 						   struct related_symbol *rel_sym)
 {
 	struct c2c_hist_entry *child_c2c_he, *child_c2c;
@@ -3375,7 +3373,7 @@ static struct hist_entry *create_symbol_child_entry(struct hist_entry *parent_he
 	memset(&child_he->stat, 0, sizeof(child_he->stat));
 
 	/* Set stat values based on c2c stats */
-	child_he->stat.nr_events = rel_sym->stats.rmt_hitm + rel_sym->stats.lcl_hitm + 
+	child_he->stat.nr_events = rel_sym->stats.rmt_hitm + rel_sym->stats.lcl_hitm +
 				   rel_sym->stats.rmt_peer + rel_sym->stats.lcl_peer;
 	child_he->stat.period = child_he->stat.nr_events;
 
@@ -3452,7 +3450,7 @@ static void build_cacheline_symbol_index(void)
 
 	/* Build index in single pass with dynamic array growth */
 	cacheline_index_size = 0;
-	cacheline_index_capacity = 256; /* Start with reasonable size */
+	cacheline_index_capacity = 64; /* Start with reasonable size */
 	cacheline_index = malloc(cacheline_index_capacity * sizeof(struct cacheline_symbol_entry));
 	if (!cacheline_index) {
 		cacheline_index_size = 0;
@@ -3463,12 +3461,12 @@ static void build_cacheline_symbol_index(void)
 	while (nd_cl) {
 		struct hist_entry *he_cl;
 		struct c2c_hist_entry *c2c_he_cl;
-		
+
 		/* Grow array if needed */
 		if (index >= cacheline_index_capacity) {
 			struct cacheline_symbol_entry *new_index;
 			int cleanup_i;
-			
+
 			cacheline_index_capacity *= 2;
 			new_index = realloc(cacheline_index,
 				cacheline_index_capacity * sizeof(struct cacheline_symbol_entry));
@@ -3489,10 +3487,10 @@ static void build_cacheline_symbol_index(void)
 			}
 			cacheline_index = new_index;
 		}
-		
+
 		he_cl = rb_entry(nd_cl, struct hist_entry, rb_node);
 		c2c_he_cl = container_of(he_cl, struct c2c_hist_entry, he);
-		
+
 		cacheline_index[index].he_cl = he_cl;
 		cacheline_index[index].c2c_he_cl = c2c_he_cl;
 		cacheline_index[index].symbol_accesses = NULL;
@@ -3503,7 +3501,7 @@ static void build_cacheline_symbol_index(void)
 			while (nd_d) {
 				struct hist_entry *he_d = rb_entry(nd_d, struct hist_entry, rb_node);
 				struct c2c_hist_entry *c2c_he_d = container_of(he_d, struct c2c_hist_entry, he);
-				
+
 				if (he_d->ms.sym && !he_d->filtered) {
 					uint64_t iaddr_d = he_d->mem_info ? mem_info__iaddr(he_d->mem_info)->addr : he_d->ms.sym->start;
 					struct symbol_access *cur = cacheline_index[index].symbol_accesses;
@@ -3539,7 +3537,7 @@ static void build_cacheline_symbol_index(void)
 				nd_d = rb_next(nd_d);
 			}
 		}
-		
+
 		index++;
 		cacheline_index_size = index;  /* Update size as we go */
 		nd_cl = rb_next(nd_cl);
@@ -3550,7 +3548,7 @@ static void build_cacheline_symbol_index(void)
  * Optimized helper function to populate cacheline grandchildren for a symbol child entry
  * Returns the number of grandchildren created
  */
-static int populate_cacheline_grandchildren(struct hist_entry *parent_he, 
+static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 					   struct hist_entry *child_he,
 					   struct related_symbol *rel_sym)
 {
@@ -3566,7 +3564,7 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 	for (int i = 0; i < cacheline_index_size; i++) {
 		struct cacheline_symbol_entry *cl_entry = &cacheline_index[i];
 		struct symbol_access *parent_access = NULL, *child_access = NULL;
-		
+
 		/* Check if both parent and child symbols access this cacheline */
 		for (struct symbol_access *sa = cl_entry->symbol_accesses; sa; sa = sa->next) {
 			if (symbol_name_equal(sa->sym, parent_he->ms.sym) && sa->iaddr == parent_iaddr) {
@@ -3574,20 +3572,20 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 			} else if (symbol_name_equal(sa->sym, rel_sym->sym) && sa->iaddr == rel_sym->iaddr) {
 				child_access = sa;
 			}
-			
+
 			/* Early exit if both found */
 			if (parent_access && child_access)
 				break;
 		}
-		
+
 		if (parent_access && child_access) {
 			struct c2c_hist_entry *grand_c2c = zalloc(sizeof(*grand_c2c));
 			struct hist_entry *grand_he;
 			u64 child_stores = child_access->stats.store;
-			
+
 			if (!grand_c2c)
 				break;
-			
+
 			init_c2c_he_related_symbols(grand_c2c);
 			grand_he = &grand_c2c->he;
 			/* copy ms from cacheline entry, but clear sym to print cacheline address */
@@ -3614,7 +3612,7 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 
 			/* Initialize hierarchy pointers for grandchild */
 			grand_he->hpp_list = &c2c.symbol_hists.list;
-			
+
 			/* Use pre-computed stats from index - eliminates redundant traversal */
 			memcpy(&grand_c2c->stats, &child_access->stats, sizeof(grand_c2c->stats));
 			memcpy(&grand_c2c->cstats, &child_access->cstats, sizeof(grand_c2c->cstats));
@@ -3656,10 +3654,10 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 		struct rb_node **p = &groot->rb_root.rb_node;
 		struct rb_node *parent = NULL;
 		bool leftmost = true;
-		while (*p != NULL) { 
-			parent = *p; 
-			p = &parent->rb_right; 
-			leftmost = false; 
+		while (*p != NULL) {
+			parent = *p;
+			p = &parent->rb_right;
+			leftmost = false;
 		}
 		rb_link_node(&items[a].grand_he->rb_node, parent, p);
 		rb_insert_color_cached(&items[a].grand_he->rb_node, groot, leftmost);
@@ -3740,7 +3738,7 @@ static void populate_symbol_children(struct hist_entry *he)
 
 /*
  * Build symbol associations based on cacheline sharing
- * 
+ *
  * Logic: When multiple symbols access the same cacheline (false sharing),
  * they are considered related. The association count increases by 1 for
  * each shared cacheline between two symbols.
@@ -3750,7 +3748,6 @@ static void build_symbol_associations(void)
 	struct rb_node *nd_sym;
 	struct hist_entry *he_sym;
 	struct c2c_hist_entry *c2c_he_sym;
-	int associations_found = 0;
 	int cl_idx;
 
 	/*
@@ -3793,7 +3790,7 @@ static void build_symbol_associations(void)
 				/* Add (symbol, iaddr) pair to list if not already there */
 				bool found = false;
 				for (i = 0; i < symbol_count; i++) {
-					if (symbol_name_equal(symbols_with_hitm[i].sym, sa->sym) && 
+					if (symbol_name_equal(symbols_with_hitm[i].sym, sa->sym) &&
 					    symbols_with_hitm[i].iaddr == iaddr) {
 						found = true;
 						break;
@@ -3851,7 +3848,6 @@ static void build_symbol_associations(void)
                                         if (symbol_name_equal(rel_sym->sym, symbols_with_hitm[j].sym) &&
                                             rel_sym->iaddr == symbols_with_hitm[j].iaddr) {
                                             exists = true;
-                                            rel_sym->association_count++;
                                             break;
                                         }
                                     }
@@ -3861,10 +3857,8 @@ static void build_symbol_associations(void)
                                         if (rel_sym) {
                                             rel_sym->sym = symbols_with_hitm[j].sym;
                                             rel_sym->iaddr = symbols_with_hitm[j].iaddr;
-                                            rel_sym->association_count = 1;
                                             /* zalloc already zeros memory, no need for memset */
                                             list_add_tail(&rel_sym->list, &c2c_he_sym->related_symbols);
-                                            associations_found++;
                                         }
                                     }
                                 }
@@ -4006,7 +4000,7 @@ static int build_symbol_hists(struct perf_env *env)
 	for (i = 0; i < cacheline_index_size; i++) {
 		struct cacheline_symbol_entry *cl_entry = &cacheline_index[i];
 		struct symbol_access *sa = cl_entry->symbol_accesses;
-		
+
 		/* Process all symbol accesses for this cacheline */
 		while (sa) {
 			if (sa->sym) {
@@ -4048,8 +4042,8 @@ static int build_symbol_hists(struct perf_env *env)
 				/* Add entry to histogram with mem_info for proper address display */
 				he_sym = hists__add_entry_ops(&c2c.symbol_hists.hists,
 							      &c2c_entry_ops,
-							      &al, NULL, NULL, mi_display, NULL,
-							      &sample, true);
+							      &al, NULL, NULL, mi_display,
+							      NULL, &sample, true);
 
 				addr_location__exit(&al);
 				if (mi_display)
