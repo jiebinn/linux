@@ -14,7 +14,6 @@
 #include <inttypes.h>
 #include <stdlib.h>
 #include <linux/compiler.h>
-#include <linux/hash.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/stringify.h>
@@ -4248,28 +4247,15 @@ perf_c2c_browser__new(struct hists *hists)
 }
 
 /*
- * Browse a specific cacheline showing only entries for the parent and child symbols
+ * Browse a specific cacheline from symbol view - find and show the main cacheline view
  */
 static int perf_c2c__browse_symbol_pair_cacheline(struct hist_entry *he_grandchild)
 {
-    struct hist_entry *he_child, *he_parent;
-    struct c2c_hist_entry *c2c_he_cl;
-    struct c2c_hists *c2c_hists_cl;
-    struct hist_browser *cl_browser;
-    struct c2c_cacheline_browser *c2c_cl_browser;
     struct rb_node *nd;
     u64 cl_addr = 0;
-    int key = -1;
-    static const char help[] =
-        " s             Toggle full length of symbol and source line columns \n"
-        " n             Toggle Node details info \n"
-        " q             Return back to symbol list \n";
 
-    if (!he_grandchild || !he_grandchild->parent_he || !he_grandchild->parent_he->parent_he)
+    if (!he_grandchild)
         return 0;
-
-    he_child = he_grandchild->parent_he;
-    he_parent = he_child->parent_he;
 
     /* Get the cacheline address from the grandchild */
     if (he_grandchild->mem_info && mem_info__daddr(he_grandchild->mem_info))
@@ -4284,117 +4270,8 @@ static int perf_c2c__browse_symbol_pair_cacheline(struct hist_entry *he_grandchi
         if (he_cl->mem_info && mem_info__daddr(he_cl->mem_info)) {
             u64 this_cl = cl_address(mem_info__daddr(he_cl->mem_info)->addr, chk_double_cl);
             if (this_cl == cl_addr) {
-                /* Found the cacheline, now filter its details */
-                c2c_he_cl = container_of(he_cl, struct c2c_hist_entry, he);
-                c2c_hists_cl = c2c_he_cl->hists;
-
-                if (!c2c_hists_cl)
-                    return 0;
-
-                /* Create a browser for the filtered cacheline */
-                c2c_cl_browser = c2c_cacheline_browser__new(&c2c_hists_cl->hists, he_cl);
-                if (c2c_cl_browser == NULL)
-                    return -1;
-
-                cl_browser = &c2c_cl_browser->hb;
-
-                /* Apply filter to show only parent and child symbol entries and sort by offset */
-                {
-                    struct rb_node *nd_detail;
-
-                    /* Save original filtered state */
-                    struct {
-                        struct hist_entry *he;
-                        bool orig_filtered;
-                    } *saved_states = NULL;
-                    int saved_count = 0, saved_capacity = 0;
-
-                    /* First pass: save original state and apply filter */
-                    nd_detail = rb_first_cached(&c2c_hists_cl->hists.entries);
-                    while (nd_detail) {
-                        struct hist_entry *he_detail = rb_entry(nd_detail, struct hist_entry, rb_node);
-                        bool keep = false;
-
-                        /* Save original filtered state */
-                        if (saved_count >= saved_capacity) {
-                            saved_capacity = saved_capacity ? saved_capacity * 2 : 16;
-                            saved_states = realloc(saved_states, saved_capacity * sizeof(*saved_states));
-                            if (!saved_states)
-                                break;
-                        }
-                        saved_states[saved_count].he = he_detail;
-                        saved_states[saved_count].orig_filtered = he_detail->filtered;
-                        saved_count++;
-
-                        /* Keep only entries matching parent or child symbols */
-                        if (he_detail->ms.sym) {
-                            /* Check if it matches parent symbol */
-                            if (he_parent->ms.sym && symbol_name_equal(he_detail->ms.sym, he_parent->ms.sym)) {
-                                if (he_parent->mem_info && he_detail->mem_info) {
-                                    u64 parent_iaddr = mem_info__iaddr(he_parent->mem_info)->addr;
-                                    u64 detail_iaddr = mem_info__iaddr(he_detail->mem_info)->addr;
-                                    if (parent_iaddr == detail_iaddr)
-                                        keep = true;
-                                }
-                            }
-
-                            /* Check if it matches child symbol */
-                            if (!keep && he_child->ms.sym && symbol_name_equal(he_detail->ms.sym, he_child->ms.sym)) {
-                                if (he_child->mem_info && he_detail->mem_info) {
-                                    u64 child_iaddr = mem_info__iaddr(he_child->mem_info)->addr;
-                                    u64 detail_iaddr = mem_info__iaddr(he_detail->mem_info)->addr;
-                                    if (child_iaddr == detail_iaddr)
-                                        keep = true;
-                                }
-                            }
-                        }
-
-                        he_detail->filtered = !keep;
-                        nd_detail = rb_next(&he_detail->rb_node);
-                    }
-
-                    /* Resort by offset after filtering to match cacheline view ordering */
-                    hists__output_resort(&c2c_hists_cl->hists, NULL);
-
-                    /* Use the standard cacheline details title */
-                    cl_browser->title = perf_c2c_cacheline_browser__title;
-
-                    /* Reset tty and run browser */
-                    SLang_reset_tty();
-                    SLang_init_tty(0, 0, 0);
-                    c2c_browser__update_nr_entries(cl_browser);
-
-                    while (1) {
-                        key = hist_browser__run(cl_browser, "? - help", true, 0);
-
-                        switch (key) {
-                        case 's':
-                            c2c.symbol_full = !c2c.symbol_full;
-                            break;
-                        case 'n':
-                            c2c.node_info = (c2c.node_info + 1) % 3;
-                            setup_nodes_header();
-                            break;
-                        case 'q':
-                            goto out;
-                        case '?':
-                            ui_browser__help_window(&cl_browser->b, help);
-                            break;
-                        default:
-                            break;
-                        }
-                    }
-
-out:
-                    /* Restore original filtered states */
-                    for (int i = 0; i < saved_count; i++) {
-                        saved_states[i].he->filtered = saved_states[i].orig_filtered;
-                    }
-                    free(saved_states);
-                }
-
-                free(c2c_cl_browser);
-                return 0;
+                /* Found the cacheline, directly call the standard browse function */
+                return perf_c2c__browse_cacheline(he_cl);
             }
         }
         nd = rb_next(&he_cl->rb_node);
@@ -4718,6 +4595,7 @@ static int build_cl_output(char *cl_sort, bool no_source)
 						  "percent_lcl_peer," :
 						  "percent_rmt_hitm,"
 						  "percent_lcl_hitm,",
+		"percent_stores_l1hit,"
 		"percent_stores_l1miss,"
 		"percent_stores_na,"
 		"offset,offset_node,dcacheline_count,",
