@@ -3536,7 +3536,7 @@ static void build_cacheline_symbol_index(void)
 						}
 					}
 				}
-				nd_d = rb_next(&he_d->rb_node);
+				nd_d = rb_next(nd_d);
 			}
 		}
 		
@@ -4274,7 +4274,7 @@ static int perf_c2c__browse_symbol_pair_cacheline(struct hist_entry *he_grandchi
                 return perf_c2c__browse_cacheline(he_cl);
             }
         }
-        nd = rb_next(&he_cl->rb_node);
+        nd = rb_next(nd);
     }
 
     return 0;
