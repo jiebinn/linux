@@ -415,7 +415,7 @@ static void merge_stats(struct stats *dest, struct stats *src)
 	/* Update min/max */
 	if (src->max > dest->max)
 		dest->max = src->max;
-	if (src->min < dest->min || dest->min == 0)
+	if (src->min < dest->min)
 		dest->min = src->min;
 }
 
