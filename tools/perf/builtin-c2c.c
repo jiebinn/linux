@@ -3220,8 +3220,10 @@ static void perf_c2c__hists_fprintf(FILE *out, struct perf_session *session)
 		/* Count the number of entries */
 		int symbol_entries = 0;
 		struct rb_node *nd = rb_first_cached(&c2c.symbol_hists.hists.entries);
+
 		while (nd) {
 			struct hist_entry *he = rb_entry(nd, struct hist_entry, rb_node);
+
 			if (!he->filtered)
 				symbol_entries++;
 			nd = rb_next(nd);
@@ -3446,8 +3448,10 @@ static void build_cacheline_symbol_index(void)
 	if (c2c.cacheline_index) {
 		for (int i = 0; i < c2c.cacheline_index_size; i++) {
 			struct symbol_access *sa = c2c.cacheline_index[i].symbol_accesses;
+
 			while (sa) {
 				struct symbol_access *next = sa->next;
+
 				free(sa);
 				sa = next;
 			}
@@ -3459,6 +3463,7 @@ static void build_cacheline_symbol_index(void)
 	/* Build index in single pass with dynamic array growth */
 	c2c.cacheline_index_size = 0;
 	c2c.cacheline_index_capacity = 64; /* Start with reasonable size */
+
 	c2c.cacheline_index = malloc(c2c.cacheline_index_capacity * sizeof(struct cacheline_symbol_entry));
 	if (!c2c.cacheline_index) {
 		c2c.cacheline_index_size = 0;
@@ -3482,8 +3487,10 @@ static void build_cacheline_symbol_index(void)
 				/* Cleanup on allocation failure */
 				for (cleanup_i = 0; cleanup_i < c2c.cacheline_index_size; cleanup_i++) {
 					struct symbol_access *sa = c2c.cacheline_index[cleanup_i].symbol_accesses;
+
 					while (sa) {
 						struct symbol_access *next = sa->next;
+
 						free(sa);
 						sa = next;
 					}
@@ -3506,6 +3513,7 @@ static void build_cacheline_symbol_index(void)
 		/* Build symbol access list for this cacheline with proper aggregation */
 		if (c2c_he_cl->hists && c2c_he_cl->hists->hists.entries.rb_root.rb_node) {
 			struct rb_node *nd_d = rb_first_cached(&c2c_he_cl->hists->hists.entries);
+
 			while (nd_d) {
 				struct hist_entry *he_d = rb_entry(nd_d, struct hist_entry, rb_node);
 				struct c2c_hist_entry *c2c_he_d = container_of(he_d, struct c2c_hist_entry, he);
@@ -3530,6 +3538,7 @@ static void build_cacheline_symbol_index(void)
 					/* Create new entry if not found */
 					if (!merged) {
 						struct symbol_access *sa = malloc(sizeof(struct symbol_access));
+
 						if (sa) {
 							sa->sym = he_d->ms.sym;
 							sa->iaddr = iaddr_d;
@@ -3643,6 +3652,7 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 			if (items_cnt == items_cap) {
 				int new_cap = items_cap ? items_cap * 2 : 8;
 				struct grand_item *ni = realloc(items, new_cap * sizeof(*items));
+
 				if (!ni) {
 					free(grand_c2c);
 					break;
@@ -3665,6 +3675,7 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 		struct rb_node **p = &groot->rb_root.rb_node;
 		struct rb_node *parent = NULL;
 		bool leftmost = true;
+
 		while (*p != NULL) {
 			parent = *p;
 			p = &parent->rb_right;
@@ -3794,9 +3805,9 @@ static void build_symbol_associations(void)
 		for (sa = cl_entry->symbol_accesses; sa; sa = sa->next) {
 			if (sa->sym && (sa->stats.rmt_hitm + sa->stats.lcl_hitm) > 0) {
 				uint64_t iaddr = sa->iaddr ? sa->iaddr : sa->sym->start;
-
 				/* Add (symbol, iaddr) pair to list if not already there */
 				bool found = false;
+
 				for (i = 0; i < symbol_count; i++) {
 					if (symbol_name_equal(symbols_with_hitm[i].sym, sa->sym) &&
 					    symbols_with_hitm[i].iaddr == iaddr) {
@@ -3808,6 +3819,7 @@ static void build_symbol_associations(void)
 				if (!found) {
 					if (symbol_count >= symbol_capacity) {
 						struct symbol_addr_pair *new_symbols;
+
 						symbol_capacity = symbol_capacity ? symbol_capacity * 2 : 4;
 						new_symbols = realloc(symbols_with_hitm,
 								    symbol_capacity * sizeof(struct symbol_addr_pair));
@@ -3836,6 +3848,7 @@ static void build_symbol_associations(void)
 					/* Match parent entry by BOTH symbol and code address */
 					{
 						uint64_t parent_iaddr = 0;
+
 						if (he_sym->mem_info)
 							parent_iaddr = mem_info__iaddr(he_sym->mem_info)->addr;
 						else if (he_sym->ms.sym)
@@ -3951,8 +3964,10 @@ static void cleanup_cacheline_symbol_index(void)
 	if (c2c.cacheline_index) {
 		for (int i = 0; i < c2c.cacheline_index_size; i++) {
 			struct symbol_access *sa = c2c.cacheline_index[i].symbol_accesses;
+
 			while (sa) {
 				struct symbol_access *next = sa->next;
+
 				free(sa);
 				sa = next;
 			}
@@ -3996,6 +4011,7 @@ static int build_symbol_hists(struct perf_env *env)
 	/* Get first thread for consistent aggregation */
 	if (next) {
 		struct hist_entry *first_he = rb_entry(next, struct hist_entry, rb_node);
+
 		synthetic_thread = first_he->thread;
 	}
 
@@ -4012,6 +4028,7 @@ static int build_symbol_hists(struct perf_env *env)
 			if (sa->sym) {
 				/* Create mem_info with proper instruction address for display */
 				struct mem_info *mi_display = mem_info__new();
+
 				if (mi_display) {
 					mem_info__iaddr(mi_display)->addr = sa->iaddr;
 					mem_info__iaddr(mi_display)->ms.maps = sa->maps;
@@ -4229,8 +4246,7 @@ static int perf_c2c_symbol_browser__title(struct hist_browser *browser,
 					  char *bf, size_t size)
 {
 	scnprintf(bf, size,
-		  "Shared Data Symbols Table     "
-		  "(%lu entries, sorted on %s)",
+		  "Shared Data Symbols Table     (%lu entries, sorted on %s)",
 		  browser->nr_non_filtered_entries,
 		  "Cycles Percent");
 	return 0;
@@ -4270,8 +4286,10 @@ static int perf_c2c__browse_symbol_pair_cacheline(struct hist_entry *he_grandchi
 	nd = rb_first_cached(&c2c.hists.hists.entries);
 	while (nd) {
 		struct hist_entry *he_cl = rb_entry(nd, struct hist_entry, rb_node);
+
 		if (he_cl->mem_info && mem_info__daddr(he_cl->mem_info)) {
 			u64 this_cl = cl_address(mem_info__daddr(he_cl->mem_info)->addr, chk_double_cl);
+
 			if (this_cl == cl_addr) {
 				/* Found the cacheline, directly call the standard browse function */
 				return perf_c2c__browse_cacheline(he_cl);
@@ -4297,11 +4315,11 @@ static int perf_c2c__hists_browse(struct hists *hists, struct perf_session *sess
 	int key = -1;
 	int ret;
 	static const char help[] =
-	" d             Display details (cacheline details for selected item) \n"
-	" e             Expand/collapse related symbols (Symbol view only) \n"
-	" TAB           Switch between Cacheline/Symbol view \n"
-	" ENTER         Open filtered Shared Data Cache Line Table for selected related symbol \n"
-	" q             Quit \n";
+	" d             Display details (cacheline details for selected item)\n"
+	" e             Expand/collapse related symbols (Symbol view only)\n"
+	" TAB           Switch between Cacheline/Symbol view\n"
+	" ENTER         Open filtered Shared Data Cache Line Table for selected related symbol\n"
+	" q             Quit\n";
 
 	/* Build symbol hists */
 	ret = build_symbol_hists(perf_session__env(session));
