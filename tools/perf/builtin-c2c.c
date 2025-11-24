@@ -3397,7 +3397,7 @@ static struct hist_entry *create_symbol_child_entry(struct hist_entry *parent_he
 
 	/* Create a synthetic mem_info to store the iaddr for proper display */
 	if (parent_he->mem_info) {
-		child_he->mem_info = memdup(parent_he->mem_info, sizeof(*parent_he->mem_info));
+		child_he->mem_info = mem_info__clone(parent_he->mem_info);
 		if (child_he->mem_info) {
 			/* Set the instruction address to the related symbol's iaddr */
 			mem_info__iaddr(child_he->mem_info)->addr = rel_sym->iaddr;
@@ -3684,6 +3684,10 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 
 				if (!ni) {
 					free(grand_c2c);
+					/* Free all previously allocated grand_c2c structures */
+					for (int j = 0; j < items_cnt; j++)
+						free(items[j].grand_c2c);
+					free(items);
 					break;
 				}
 				items = ni; items_cap = new_cap;
