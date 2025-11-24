@@ -40,6 +40,7 @@
 #include "evlist.h"
 #include "evsel.h"
 #include "ui/browsers/hists.h"
+#include "ui/browsers/c2c-symbol.h"
 #include "thread.h"
 #include "mem2node.h"
 #include "mem-info.h"
@@ -190,6 +191,11 @@ static const struct option c2c_options[] = {
 static struct perf_c2c c2c;
 
 static int build_symbol_hists(struct perf_env *env);
+
+/* Exported functions for c2c-symbol browser */
+void build_cacheline_symbol_index(void);
+void populate_symbol_children(struct hist_entry *he);
+int perf_c2c__browse_cacheline(struct hist_entry *he);
 
 /* Helper function to initialize c2c_hist_entry related_symbols */
 static void init_c2c_he_related_symbols(struct c2c_hist_entry *c2c_he)
@@ -3435,7 +3441,7 @@ static struct hist_entry *create_symbol_child_entry(struct hist_entry *parent_he
 }
 
 /* Build index mapping cachelines to accessing symbols for performance */
-static void build_cacheline_symbol_index(void)
+void build_cacheline_symbol_index(void)
 {
 	struct rb_node *nd_cl;
 	int index = 0;
@@ -3696,7 +3702,7 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 	return items_cnt;
 }
 
-static void populate_symbol_children(struct hist_entry *he)
+void populate_symbol_children(struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
 	struct related_symbol **sorted;
@@ -4018,6 +4024,11 @@ static int build_symbol_hists(struct perf_env *env)
 	/* Build cacheline index (will only build once due to internal flag) */
 	build_cacheline_symbol_index();
 
+	if (c2c.cacheline_index_size == 0) {
+		ui__error("Cacheline index is empty, cannot build symbol hists\n");
+		return -1;
+	}
+
 	/* Directly create histogram entries from cached symbol_access data */
 	for (i = 0; i < c2c.cacheline_index_size; i++) {
 		struct cacheline_symbol_entry *cl_entry = &c2c.cacheline_index[i];
@@ -4170,7 +4181,7 @@ c2c_cacheline_browser__new(struct hists *hists, struct hist_entry *he)
 	return browser;
 }
 
-static int perf_c2c__browse_cacheline(struct hist_entry *he)
+int perf_c2c__browse_cacheline(struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
 	struct c2c_hists *c2c_hists;
@@ -4241,17 +4252,6 @@ static int perf_c2c_browser__title(struct hist_browser *browser,
 	return 0;
 }
 
-/* Custom title for pair-filtered Shared Data Cache Line Table */
-static int perf_c2c_symbol_browser__title(struct hist_browser *browser,
-					  char *bf, size_t size)
-{
-	scnprintf(bf, size,
-		  "Shared Data Symbols Table     (%lu entries, sorted on %s)",
-		  browser->nr_non_filtered_entries,
-		  "Cycles Percent");
-	return 0;
-}
-
 static struct hist_browser*
 perf_c2c_browser__new(struct hists *hists)
 {
@@ -4266,42 +4266,6 @@ perf_c2c_browser__new(struct hists *hists)
 }
 
 /*
- * Browse a specific cacheline from symbol view - find and show the main cacheline view
- */
-static int perf_c2c__browse_symbol_pair_cacheline(struct hist_entry *he_grandchild)
-{
-	struct rb_node *nd;
-	u64 cl_addr = 0;
-
-	if (!he_grandchild)
-		return 0;
-
-	/* Get the cacheline address from the grandchild */
-	if (he_grandchild->mem_info && mem_info__daddr(he_grandchild->mem_info))
-		cl_addr = cl_address(mem_info__daddr(he_grandchild->mem_info)->addr, chk_double_cl);
-	else
-		return 0;
-
-	/* Find the cacheline entry in the main c2c.hists */
-	nd = rb_first_cached(&c2c.hists.hists.entries);
-	while (nd) {
-		struct hist_entry *he_cl = rb_entry(nd, struct hist_entry, rb_node);
-
-		if (he_cl->mem_info && mem_info__daddr(he_cl->mem_info)) {
-			u64 this_cl = cl_address(mem_info__daddr(he_cl->mem_info)->addr, chk_double_cl);
-
-			if (this_cl == cl_addr) {
-				/* Found the cacheline, directly call the standard browse function */
-				return perf_c2c__browse_cacheline(he_cl);
-			}
-		}
-		nd = rb_next(nd);
-	}
-
-	return 0;
-}
-
-/*
  * Browse a Shared Data Cache Line Table filtered to cachelines shared by
  * the selected related symbol (child) and its parent symbol. This uses the
  * standard cacheline columns and title, and supports 'd' to open cacheline details.
@@ -4309,14 +4273,13 @@ static int perf_c2c__browse_symbol_pair_cacheline(struct hist_entry *he_grandchi
 static int perf_c2c__hists_browse(struct hists *hists, struct perf_session *session)
 {
 	struct hist_browser *cl_browser = NULL;
-	struct hist_browser *sym_browser = NULL;
+	struct c2c_symbol_browser *sym_browser = NULL;
 	struct hist_browser *active_browser;
-	bool is_symbol_view = false;
 	int key = -1;
 	int ret;
 	static const char help[] =
 	" d             Display details (cacheline details for selected item)\n"
-	" e             Expand/collapse related symbols (Symbol view only)\n"
+	" e/+             Expand/collapse related symbols (Symbol view only)\n"
 	" TAB           Switch between Cacheline/Symbol view\n"
 	" ENTER         Open filtered Shared Data Cache Line Table for selected related symbol\n"
 	" q             Quit\n";
@@ -4324,7 +4287,7 @@ static int perf_c2c__hists_browse(struct hists *hists, struct perf_session *sess
 	/* Build symbol hists */
 	ret = build_symbol_hists(perf_session__env(session));
 	if (ret) {
-		ui__error("Failed to build symbol view\n");
+		ui__error("Failed to build symbol view (ret=%d)\n", ret);
 		/* Continue with cacheline view only */
 	}
 
@@ -4332,77 +4295,44 @@ static int perf_c2c__hists_browse(struct hists *hists, struct perf_session *sess
 	if (cl_browser == NULL)
 		return -1;
 
-	sym_browser = hist_browser__new(&c2c.symbol_hists.hists);
-	if (sym_browser) {
-		sym_browser->title = perf_c2c_symbol_browser__title;
-		sym_browser->c2c_filter = true;
-		/* Enable hierarchy display for symbol view */
-		sym_browser->show_headers = true;
-		sym_browser->min_pcnt = 0.0;
-	}
+	sym_browser = c2c_symbol_browser__new(&c2c.symbol_hists.hists, session);
+	if (sym_browser == NULL)
+		return -1;
 
-	active_browser = cl_browser;
-	/* Default to non-hierarchy for cacheline view */
-	symbol_conf.report_hierarchy = false;
+	c2c_browser__update_nr_entries(cl_browser);
+	c2c_browser__update_nr_entries(&sym_browser->hb);
 
-	/* reset abort key so that it can get Ctrl-C as a key */
-	SLang_reset_tty();
-	SLang_init_tty(0, 0, 0);
-
-	c2c_browser__update_nr_entries(active_browser);
+	active_browser = cl_browser;  // Default to cacheline view
 
 	while (1) {
 		key = hist_browser__run(active_browser, "? - help", true, 0);
 
-	switch (key) {
-	case 'q':
-		goto out;
-	case 'd':
-		if (!is_symbol_view && active_browser->he_selection) {
-			perf_c2c__browse_cacheline(active_browser->he_selection);
-		} else if (is_symbol_view && active_browser->he_selection) {
-			struct hist_entry *he = active_browser->he_selection;
-			/* Check if this is a cacheline grandchild entry */
-			if (!he->ms.sym && he->mem_info && he->parent_he && he->parent_he->parent_he) {
-				/* Browse filtered cacheline view for this cacheline */
-				perf_c2c__browse_symbol_pair_cacheline(he);
+		switch (key) {
+		case 'q':
+			goto out;
+		case 'd':
+			/* Handle cacheline detail view */
+			if (active_browser == cl_browser && active_browser->he_selection) {
+				/* In cacheline view, directly browse the selected cacheline */
+				perf_c2c__browse_cacheline(active_browser->he_selection);
+			} else if (active_browser == &sym_browser->hb && active_browser->he_selection) {
+				/* In symbol view, delegate to symbol browser handler */
+				c2c_symbol_browser__browse_cacheline_detail(sym_browser, active_browser->he_selection, hists);
 			}
-		}
-		break;
-	case 'e':
-	case '+':
-		/* Expand/collapse related symbols in symbol view */
-		if (is_symbol_view && active_browser->he_selection) {
-			struct hist_entry *he = active_browser->he_selection;
-
-			if (he->has_children) {
-				/* Create child entries if not already done */
-				if (RB_EMPTY_ROOT(&he->hroot_out.rb_root)) {
-					/* Ensure index is built for interactive use */
-					build_cacheline_symbol_index();
-					populate_symbol_children(he);
-				}
-
-				/* Toggle the folded state since we have children */
-				he->unfolded = !he->unfolded;
-				/* Update the browser to reflect hierarchy changes */
-				c2c_browser__update_nr_entries(active_browser);
-				active_browser->b.seek(&active_browser->b, SEEK_SET, 0);
-			}
-		}
-		break;
-	case '\t':
-		if (sym_browser) {
-			is_symbol_view = !is_symbol_view;
-			active_browser = is_symbol_view ? sym_browser : cl_browser;
-			c2c_browser__update_nr_entries(active_browser);
-		}
-		break;
-	case '?':
-		ui_browser__help_window(&active_browser->b, help);
-		break;
-	default:
-		break;
+			break;
+		case 'e':
+		case '+':
+			if (active_browser == &sym_browser->hb)
+				c2c_symbol_browser__handle_expand(sym_browser);
+			break;
+		case '\t':
+			active_browser = (active_browser == cl_browser) ? &sym_browser->hb : cl_browser;
+			break;
+		case '?':
+			ui_browser__help_window(&active_browser->b, help);
+			break;
+		default:
+			break;
 		}
 	}
 
@@ -4410,7 +4340,7 @@ out:
 	if (cl_browser)
 		hist_browser__delete(cl_browser);
 	if (sym_browser)
-		hist_browser__delete(sym_browser);
+		c2c_symbol_browser__delete(sym_browser);
 	return 0;
 }
 
