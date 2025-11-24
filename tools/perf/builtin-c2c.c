@@ -274,6 +274,29 @@ static void free_child_entries(struct hist_entry *parent_he)
 		if (child_he->mem_info)
 			zfree(&child_he->mem_info);
 
+		/* Free child's hists */
+		if (child_c2c_he->hists) {
+			hists__delete_entries(&child_c2c_he->hists->hists);
+			zfree(&child_c2c_he->hists);
+		}
+
+		/* Free related symbols list */
+		{
+			struct related_symbol *rel_sym, *tmp;
+			list_for_each_entry_safe(rel_sym, tmp, &child_c2c_he->related_symbols, list) {
+				list_del(&rel_sym->list);
+				free(rel_sym);
+			}
+		}
+
+		if (child_he->parent_he && symbol_conf.cumulate_callchain && child_he->stat_acc)
+			zfree(&child_he->stat_acc);
+
+		zfree(&child_c2c_he->cpuset);
+		zfree(&child_c2c_he->nodeset);
+		zfree(&child_c2c_he->nodestr);
+		zfree(&child_c2c_he->node_stats);
+
 		rb_erase_cached(&child_he->rb_node, &parent_he->hroot_out);
 		free(child_c2c_he);
 
