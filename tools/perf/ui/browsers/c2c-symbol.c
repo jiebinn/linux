@@ -7,7 +7,6 @@
  */
 
 #include "../../builtin-c2c.h"
-#include "c2c-symbol.h"
 #include "../browser.h"
 #include "../ui.h"
 #include "../../util/hist.h"
@@ -28,7 +27,7 @@ struct c2c_hist_entry;
 /**
  * c2c_symbol_browser__title - Generate title for symbol browser
  */
-int c2c_symbol_browser__title(struct hist_browser *browser,
+static int c2c_symbol_browser__title(struct hist_browser *browser,
 			      char *bf, size_t size)
 {
 	scnprintf(bf, size,

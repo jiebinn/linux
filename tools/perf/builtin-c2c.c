@@ -40,7 +40,7 @@
 #include "evlist.h"
 #include "evsel.h"
 #include "ui/browsers/hists.h"
-#include "ui/browsers/c2c-symbol.h"
+#include "builtin-c2c.h"
 #include "thread.h"
 #include "mem2node.h"
 #include "mem-info.h"
@@ -188,14 +188,9 @@ static const struct option c2c_options[] = {
 	OPT_END()
 };
 
-static struct perf_c2c c2c;
+struct perf_c2c c2c;
 
 static int build_symbol_hists(struct perf_env *env);
-
-/* Exported functions for c2c-symbol browser */
-void build_cacheline_symbol_index(void);
-void populate_symbol_children(struct hist_entry *he);
-int perf_c2c__browse_cacheline(struct hist_entry *he);
 
 /* Helper function to initialize c2c_hist_entry related_symbols */
 static void init_c2c_he_related_symbols(struct c2c_hist_entry *c2c_he)
