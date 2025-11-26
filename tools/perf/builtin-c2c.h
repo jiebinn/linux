@@ -381,13 +381,6 @@ static inline void c2c_he_invalidate_total_cycles_cache(struct c2c_hist_entry *c
 }
 
 /**
- * c2c_add_cstats - Merge compute_stats from src into dest
- * @dest: Destination statistics
- * @src: Source statistics to merge
- */
-void c2c_add_cstats(struct compute_stats *dest, struct compute_stats *src);
-
-/**
  * c2c_hists__init - Initialize C2C histograms
  * @hists: C2C hists to initialize
  * @sort: Sort string
@@ -408,6 +401,15 @@ int c2c_hists__init(struct c2c_hists *hists, const char *sort, int nr_header_lin
  * Returns: 0 on success, negative error code on failure
  */
 int c2c_hists__reinit(struct c2c_hists *hists, const char *output, const char *sort, struct perf_env *env);
+
+/**
+ * free_child_entries - Free child entries of a histogram entry
+ * @parent_he: Parent histogram entry whose children to free
+ *
+ * Recursively frees all child entries and their associated resources
+ * including related symbols, histograms, and memory info.
+ */
+void free_child_entries(struct hist_entry *parent_he);
 
 /**
  * c2c_entry_ops - Histogram entry operations for C2C

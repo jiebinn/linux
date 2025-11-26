@@ -51,9 +51,6 @@
 #include "string2.h"
 #include "util/util.h"
 
-/*
- * Structures are now defined in builtin-c2c.h
- */
 
 static char const *coalesce_default = "iaddr";
 
@@ -78,11 +75,6 @@ static const struct option c2c_options[] = {
 };
 
 struct perf_c2c c2c;
-
-/*
- * Helper functions init_c2c_he_related_symbols and c2c_he_invalidate_total_cycles_cache
- * are now inline functions in builtin-c2c.h
- */
 
 static void *c2c_he_zalloc(size_t size)
 {
@@ -126,62 +118,6 @@ out_free:
 	return NULL;
 }
 
-/* Helper function to free child entries properly */
-static void free_child_entries(struct hist_entry *parent_he)
-{
-	struct rb_node *nd;
-	struct hist_entry *child_he;
-	struct c2c_hist_entry *child_c2c_he;
-
-	if (RB_EMPTY_ROOT(&parent_he->hroot_out.rb_root))
-		return;
-
-	nd = rb_first_cached(&parent_he->hroot_out);
-	while (nd) {
-		struct rb_node *next = rb_next(nd);
-
-		child_he = rb_entry(nd, struct hist_entry, rb_node);
-		child_c2c_he = container_of(child_he, struct c2c_hist_entry, he);
-
-		if (child_he->stat_acc)
-			zfree(&child_he->stat_acc);
-
-		if (child_he->mem_info)
-			mem_info__put(child_he->mem_info);
-
-		/* Free child's hists */
-		if (child_c2c_he->hists) {
-			hists__delete_entries(&child_c2c_he->hists->hists);
-			zfree(&child_c2c_he->hists);
-		}
-
-		/* Free related symbols list */
-		{
-			struct related_symbol *rel_sym, *tmp;
-			list_for_each_entry_safe(rel_sym, tmp, &child_c2c_he->related_symbols, list) {
-				list_del(&rel_sym->list);
-				free(rel_sym);
-			}
-		}
-
-		if (child_he->parent_he && symbol_conf.cumulate_callchain && child_he->stat_acc)
-			zfree(&child_he->stat_acc);
-
-		zfree(&child_c2c_he->cpuset);
-		zfree(&child_c2c_he->nodeset);
-		zfree(&child_c2c_he->nodestr);
-		zfree(&child_c2c_he->node_stats);
-
-		/* Recursively free grandchildren in child_he->hroot_out */
-		free_child_entries(child_he);
-
-		rb_erase_cached(&child_he->rb_node, &parent_he->hroot_out);
-		free(child_c2c_he);
-
-		nd = next;
-	}
-}
-
 static void c2c_he_free(void *he)
 {
 	struct c2c_hist_entry *c2c_he;
@@ -214,7 +150,6 @@ static void c2c_he_free(void *he)
 	free(c2c_he);
 }
 
-/* Exported for c2c-symbol.c */
 struct hist_entry_ops c2c_entry_ops = {
 	.new	= c2c_he_zalloc,
 	.free	= c2c_he_free,
@@ -297,41 +232,6 @@ static void compute_stats(struct c2c_hist_entry *c2c_he,
 		update_stats(&cstats->lcl_peer, weight);
 	else if (stats->load)
 		update_stats(&cstats->load, weight);
-}
-
-/* Helper function to merge two stats structures */
-static void merge_stats(struct stats *dest, struct stats *src)
-{
-	double delta;
-
-	if (src->n == 0)
-		return;
-
-	if (dest->n == 0) {
-		*dest = *src;
-		return;
-	}
-
-	delta = src->mean - dest->mean;
-	dest->M2 += src->M2 + delta * delta * dest->n * src->n / (dest->n + src->n);
-	dest->mean = (dest->mean * dest->n + src->mean * src->n) / (dest->n + src->n);
-	dest->n += src->n;
-
-	/* Update min/max */
-	if (src->max > dest->max)
-		dest->max = src->max;
-	if (src->min < dest->min)
-		dest->min = src->min;
-}
-
-/* Function to merge compute_stats during symbol aggregation - exported for c2c-symbol.c */
-void c2c_add_cstats(struct compute_stats *dest, struct compute_stats *src)
-{
-	merge_stats(&dest->rmt_hitm, &src->rmt_hitm);
-	merge_stats(&dest->lcl_hitm, &src->lcl_hitm);
-	merge_stats(&dest->rmt_peer, &src->rmt_peer);
-	merge_stats(&dest->lcl_peer, &src->lcl_peer);
-	merge_stats(&dest->load, &src->load);
 }
 
 static int process_sample_event(const struct perf_tool *tool __maybe_unused,
@@ -2619,7 +2519,7 @@ static int hpp_list__parse(struct perf_hpp_list *hpp_list,
 #if 0
 	/* and then copy output fields to sort keys */
 	perf_hpp__append_sort_keys(&hists->list);
- #endif
+#endif
 
 	free(output);
 	free(sort);
@@ -3328,8 +3228,10 @@ static int perf_c2c__hists_browse(struct hists *hists, struct perf_session *sess
 		return -1;
 
 	sym_browser = c2c_symbol_browser__new(&c2c.symbol_hists.hists, session);
-	if (sym_browser == NULL)
+	if (sym_browser == NULL) {
+		hist_browser__delete(cl_browser);
 		return -1;
+	}
 
 	c2c_browser__update_nr_entries(cl_browser);
 	c2c_browser__update_nr_entries(&sym_browser->hb);

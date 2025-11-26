@@ -31,6 +31,7 @@
 #include "../../util/thread.h"
 #include "../../util/addr_location.h"
 #include "../../util/event.h"
+#include "../../util/stat.h"
 
 /*
  * ============================================================================
@@ -86,11 +87,40 @@ static int grand_item_cmp(const void *a, const void *b)
 	return 0;
 }
 
-/*
- * ============================================================================
- * Helper functions for symbol view processing
- * ============================================================================
- */
+/* Helper function to merge two stats structures */
+static void merge_stats(struct stats *dest, struct stats *src)
+{
+	double delta;
+
+	if (src->n == 0)
+		return;
+
+	if (dest->n == 0) {
+		*dest = *src;
+		return;
+	}
+
+	delta = src->mean - dest->mean;
+	dest->M2 += src->M2 + delta * delta * dest->n * src->n / (dest->n + src->n);
+	dest->mean = (dest->mean * dest->n + src->mean * src->n) / (dest->n + src->n);
+	dest->n += src->n;
+
+	/* Update min/max */
+	if (src->max > dest->max)
+		dest->max = src->max;
+	if (src->min < dest->min)
+		dest->min = src->min;
+}
+
+/* Function to merge compute_stats during symbol aggregation */
+static void c2c_add_cstats(struct compute_stats *dest, struct compute_stats *src)
+{
+	merge_stats(&dest->rmt_hitm, &src->rmt_hitm);
+	merge_stats(&dest->lcl_hitm, &src->lcl_hitm);
+	merge_stats(&dest->rmt_peer, &src->rmt_peer);
+	merge_stats(&dest->lcl_peer, &src->lcl_peer);
+	merge_stats(&dest->load, &src->load);
+}
 
 /**
  * validate_and_prepare_entries - Validate and prepare for populating symbol children
@@ -1189,4 +1219,66 @@ int c2c_symbol_browser__browse_cacheline_detail(struct c2c_symbol_browser *brows
 	}
 
 	return -1; /* Cacheline not found */
+}
+
+/**
+ * free_child_entries - Free child entries of a histogram entry
+ * @parent_he: Parent histogram entry whose children to free
+ *
+ * Recursively frees all child entries and their associated resources
+ * including related symbols, histograms, and memory info.
+ */
+void free_child_entries(struct hist_entry *parent_he)
+{
+	struct rb_node *nd;
+	struct hist_entry *child_he;
+	struct c2c_hist_entry *child_c2c_he;
+
+	if (RB_EMPTY_ROOT(&parent_he->hroot_out.rb_root))
+		return;
+
+	nd = rb_first_cached(&parent_he->hroot_out);
+	while (nd) {
+		struct rb_node *next = rb_next(nd);
+
+		child_he = rb_entry(nd, struct hist_entry, rb_node);
+		child_c2c_he = container_of(child_he, struct c2c_hist_entry, he);
+
+		if (child_he->stat_acc)
+			zfree(&child_he->stat_acc);
+
+		if (child_he->mem_info)
+			mem_info__put(child_he->mem_info);
+
+		/* Free child's hists */
+		if (child_c2c_he->hists) {
+			hists__delete_entries(&child_c2c_he->hists->hists);
+			zfree(&child_c2c_he->hists);
+		}
+
+		/* Free related symbols list */
+		{
+			struct related_symbol *rel_sym, *tmp;
+			list_for_each_entry_safe(rel_sym, tmp, &child_c2c_he->related_symbols, list) {
+				list_del(&rel_sym->list);
+				free(rel_sym);
+			}
+		}
+
+		if (child_he->parent_he && symbol_conf.cumulate_callchain && child_he->stat_acc)
+			zfree(&child_he->stat_acc);
+
+		zfree(&child_c2c_he->cpuset);
+		zfree(&child_c2c_he->nodeset);
+		zfree(&child_c2c_he->nodestr);
+		zfree(&child_c2c_he->node_stats);
+
+		/* Recursively free grandchildren in child_he->hroot_out */
+		free_child_entries(child_he);
+
+		rb_erase_cached(&child_he->rb_node, &parent_he->hroot_out);
+		free(child_c2c_he);
+
+		nd = next;
+	}
 }
