@@ -45,8 +45,6 @@
 #include "mem2node.h"
 #include "mem-info.h"
 #include "symbol.h"
-#include <symbol/kallsyms.h>
-#include "map.h"
 #include "ui/ui.h"
 #include "ui/progress.h"
 #include "pmus.h"
@@ -149,7 +147,7 @@ static void free_child_entries(struct hist_entry *parent_he)
 			zfree(&child_he->stat_acc);
 
 		if (child_he->mem_info)
-			zfree(&child_he->mem_info);
+			mem_info__put(child_he->mem_info);
 
 		/* Free child's hists */
 		if (child_c2c_he->hists) {
@@ -173,6 +171,9 @@ static void free_child_entries(struct hist_entry *parent_he)
 		zfree(&child_c2c_he->nodeset);
 		zfree(&child_c2c_he->nodestr);
 		zfree(&child_c2c_he->node_stats);
+
+		/* Recursively free grandchildren in child_he->hroot_out */
+		free_child_entries(child_he);
 
 		rb_erase_cached(&child_he->rb_node, &parent_he->hroot_out);
 		free(child_c2c_he);

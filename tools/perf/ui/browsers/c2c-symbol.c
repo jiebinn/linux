@@ -531,12 +531,23 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 				struct grand_item *ni = realloc(items, new_cap * sizeof(*items));
 
 				if (!ni) {
+					/* Clean up the current grand_c2c being constructed */
+					if (grand_he->mem_info)
+						mem_info__put(grand_he->mem_info);
+					if (grand_he->stat_acc)
+						free(grand_he->stat_acc);
 					free(grand_c2c);
-					/* Free all previously allocated grand_c2c structures */
-					for (int j = 0; j < items_cnt; j++)
+
+					/* Free all previously allocated grand_c2c structures with proper cleanup */
+					for (int j = 0; j < items_cnt; j++) {
+						if (items[j].grand_he->mem_info)
+							mem_info__put(items[j].grand_he->mem_info);
+						if (items[j].grand_he->stat_acc)
+							free(items[j].grand_he->stat_acc);
 						free(items[j].grand_c2c);
+					}
 					free(items);
-					break;
+					return items_cnt;  /* Return what we have so far */
 				}
 				items = ni;
 				items_cap = new_cap;
