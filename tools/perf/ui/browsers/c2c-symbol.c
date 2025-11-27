@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <alloca.h>
+#include <inttypes.h>
 #include <linux/zalloc.h>
 #include <linux/list.h>
 #include <linux/rbtree.h>
@@ -184,10 +185,10 @@ cycles_lcl_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	cycles = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
 
 	if (he->parent_he) {
-		int out_len = snprintf(NULL, 0, "    %lu", cycles) + 1;
+		int out_len = snprintf(NULL, 0, "    %" PRIu64, cycles) + 1;
 		char *out = alloca(out_len);
 
-		snprintf(out, out_len, "    %lu", cycles);
+		snprintf(out, out_len, "    %" PRIu64, cycles);
 		return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
 	}
 
@@ -210,10 +211,10 @@ cycles_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	cycles = avg_stats(&c2c_he->cstats.load) * other_load;
 
 	if (he->parent_he) {
-		int out_len = snprintf(NULL, 0, "    %lu", cycles) + 1;
+		int out_len = snprintf(NULL, 0, "    %" PRIu64, cycles) + 1;
 		char *out = alloca(out_len);
 
-		snprintf(out, out_len, "    %lu", cycles);
+		snprintf(out, out_len, "    %" PRIu64, cycles);
 		return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
 	}
 
@@ -255,10 +256,10 @@ cnt_other_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
 
 	if (he->parent_he) {
-		int out_len = snprintf(NULL, 0, "    %lu", other_load) + 1;
+		int out_len = snprintf(NULL, 0, "    %" PRIu64, other_load) + 1;
 		char *out = alloca(out_len);
 
-		snprintf(out, out_len, "    %lu", other_load);
+		snprintf(out, out_len, "    %" PRIu64, other_load);
 		return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
 	}
 
@@ -1343,9 +1344,9 @@ int build_symbol_hists(struct perf_env *env)
 				if (he_sym) {
 					c2c_he_sym = container_of(he_sym, struct c2c_hist_entry, he);
 
-					/* Copy aggregated stats from cached symbol_access */
-					c2c_he_sym->stats = sa->stats;
-					c2c_he_sym->cstats = sa->cstats;
+					/* Accumulate stats from cached symbol_access across cachelines */
+					c2c_add_stats(&c2c_he_sym->stats, &sa->stats);
+					c2c_add_cstats(&c2c_he_sym->cstats, &sa->cstats);
 					c2c_add_stats(&c2c.symbol_hists.stats, &sa->stats);
 
 					hists__inc_nr_samples(&c2c.symbol_hists.hists, he_sym->filtered);
