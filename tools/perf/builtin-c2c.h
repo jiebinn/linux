@@ -3,31 +3,19 @@
 #define _PERF_BUILTIN_C2C_H_ 1
 
 #include <linux/list.h>
-#include <linux/rbtree.h>
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "ui/browser.h"
 #include "ui/browsers/hists.h"
 #include "util/mem-events.h"
 #include "util/mem2node.h"
 #include "util/hist.h"
 #include "util/symbol.h"
 #include "util/tool.h"
-
-/* Forward declarations */
-struct perf_session;
-struct perf_env;
-struct symbol;
-struct map;
-struct maps;
-struct hist_entry;
-
-/*
- * ============================================================================
- * Shared structures for C2C symbol view
- * ============================================================================
- */
+#include "util/session.h"
+#include "util/env.h"
+#include "util/map.h"
+#include "util/maps.h"
 
 /**
  * struct compute_stats - Statistics computed from memory access samples
@@ -227,14 +215,6 @@ struct perf_c2c {
 /* Global C2C context - defined in builtin-c2c.c */
 extern struct perf_c2c c2c;
 
-/* Note: chk_double_cl is declared in util/sort.h */
-
-/*
- * ============================================================================
- * C2C Symbol Browser API - implemented in ui/browsers/c2c-symbol.c
- * ============================================================================
- */
-
 /**
  * struct c2c_symbol_browser - Symbol browser for C2C analysis
  * @hb: Base histogram browser
@@ -287,12 +267,6 @@ int c2c_symbol_browser__browse_cacheline_detail(struct c2c_symbol_browser *brows
 					       struct hist_entry *he_selection,
 					       struct hists *main_hists);
 
-/*
- * ============================================================================
- * Symbol View Data Processing - implemented in ui/browsers/c2c-symbol.c
- * ============================================================================
- */
-
 /**
  * build_symbol_hists - Build symbol-level histograms from cacheline data
  * @env: Perf environment containing symbol tables
@@ -330,12 +304,6 @@ void cleanup_cacheline_symbol_index(void);
  */
 void populate_symbol_children(struct hist_entry *he);
 
-/*
- * ============================================================================
- * Cacheline Browser API - implemented in builtin-c2c.c
- * ============================================================================
- */
-
 /**
  * perf_c2c__browse_cacheline - Display cacheline details browser
  * @he: Histogram entry for the cacheline to browse
@@ -343,12 +311,6 @@ void populate_symbol_children(struct hist_entry *he);
  * Returns: 0 on success, negative error code on failure
  */
 int perf_c2c__browse_cacheline(struct hist_entry *he);
-
-/*
- * ============================================================================
- * Utility Functions - shared between builtin-c2c.c and c2c-symbol.c
- * ============================================================================
- */
 
 /**
  * symbol_name_equal - Compare two symbols by name

@@ -2526,7 +2526,6 @@ static int hpp_list__parse(struct perf_hpp_list *hpp_list,
 	return ret;
 }
 
-/* Exported for c2c-symbol.c */
 int c2c_hists__init(struct c2c_hists *hists,
 		    const char *sort,
 		    int nr_header_lines,
@@ -2547,7 +2546,6 @@ int c2c_hists__init(struct c2c_hists *hists,
 	return hpp_list__parse(&hists->list, /*output=*/NULL, sort, env);
 }
 
-/* Exported for c2c-symbol.c */
 int c2c_hists__reinit(struct c2c_hists *c2c_hists,
 		      const char *output,
 		      const char *sort,
@@ -3021,42 +3019,9 @@ static void perf_c2c__hists_fprintf(FILE *out, struct perf_session *session)
 	fprintf(out, "#\n");
 
 	print_pareto(out, perf_session__env(session));
-
-	/* Add symbol view in stdio mode */
-	if (build_symbol_hists(perf_session__env(session)) == 0) {
-		/* Count the number of entries */
-		int symbol_entries = 0;
-		struct rb_node *nd = rb_first_cached(&c2c.symbol_hists.hists.entries);
-
-		while (nd) {
-			struct hist_entry *he = rb_entry(nd, struct hist_entry, rb_node);
-
-			if (!he->filtered)
-				symbol_entries++;
-			nd = rb_next(nd);
-		}
-
-		fprintf(out, "\n");
-		fprintf(out, "Shared Data Symbols Table     (%d entries, sorted on Cycles Percent)\n", symbol_entries);
-		fprintf(out, "#\n");
-
-		hists__fprintf(&c2c.symbol_hists.hists, true, 0, 0, 0, stdout, true);
-	}
 }
 
 #ifdef HAVE_SLANG_SUPPORT
-
-/*
- * Symbol view processing functions are now implemented in
- * ui/browsers/c2c-symbol.c:
- *   - build_symbol_hists()
- *   - build_cacheline_symbol_index()
- *   - cleanup_cacheline_symbol_index()
- *   - populate_symbol_children()
- *   - build_symbol_associations()
- */
-
-
 static void c2c_browser__update_nr_entries(struct hist_browser *hb)
 {
 	u64 nr_entries = 0;

@@ -15,8 +15,6 @@
 #include <linux/zalloc.h>
 #include <linux/list.h>
 #include <linux/rbtree.h>
-#include <linux/string.h>
-#include <sys/ttydefaults.h>
 
 #include "../../builtin-c2c.h"
 #include "../browser.h"
@@ -30,14 +28,9 @@
 #include "../../util/debug.h"
 #include "../../util/thread.h"
 #include "../../util/addr_location.h"
-#include "../../util/event.h"
-#include "../../util/stat.h"
 
-/*
- * ============================================================================
- * Internal structures for symbol view processing
- * ============================================================================
- */
+/* Helper macros for common C2C operations */
+#define HITM_COUNT(stats) ((stats)->rmt_hitm + (stats)->lcl_hitm)
 
 /**
  * struct grand_item - Grandchild entry for sorting
@@ -50,12 +43,6 @@ struct grand_item {
 	struct hist_entry	*grand_he;
 	u64			 stores;
 };
-
-/*
- * ============================================================================
- * Comparison functions for qsort
- * ============================================================================
- */
 
 /**
  * related_symbol_cmp - Compare related symbols by store count (descending)
@@ -120,6 +107,92 @@ static void c2c_add_cstats(struct compute_stats *dest, struct compute_stats *src
 	merge_stats(&dest->rmt_peer, &src->rmt_peer);
 	merge_stats(&dest->lcl_peer, &src->lcl_peer);
 	merge_stats(&dest->load, &src->load);
+}
+
+/**
+ * init_grandchild_hist_entry - Initialize a grandchild hist_entry for symbol view
+ * @grand_he: The grandchild hist_entry to initialize
+ * @grand_c2c: The corresponding c2c_hist_entry
+ * @cl_entry: Cacheline entry containing base information
+ * @child_he: Parent hist_entry (the symbol child)
+ * @child_access: Symbol access data for statistics
+ *
+ * Returns: 0 on success, negative value on memory allocation failure
+ */
+static int init_grandchild_hist_entry(struct hist_entry *grand_he,
+				     struct c2c_hist_entry *grand_c2c,
+				     struct cacheline_symbol_entry *cl_entry,
+				     struct hist_entry *child_he,
+				     struct symbol_access *child_access)
+{
+	/* Basic initialization */
+	init_c2c_he_related_symbols(grand_c2c);
+
+	/* Copy map_symbol from cacheline entry, but clear sym to print cacheline address */
+	memcpy(&grand_he->ms, &cl_entry->he_cl->ms, sizeof(struct map_symbol));
+	grand_he->ms.sym = NULL;
+
+	/* Copy thread and CPU information from cacheline entry */
+	grand_he->mem_info = mem_info__get(cl_entry->he_cl->mem_info);
+	grand_he->thread = cl_entry->he_cl->thread;
+	grand_he->cpumode = cl_entry->he_cl->cpumode;
+	grand_he->cpu = cl_entry->he_cl->cpu;
+	grand_he->socket = cl_entry->he_cl->socket;
+
+	/* Hierarchy setup */
+	grand_he->parent_he = child_he;
+	grand_he->depth = child_he->depth + 1;
+	grand_he->leaf = true;
+	grand_he->hists = &c2c.symbol_hists.hists;
+	grand_he->filtered = false;
+	grand_he->unfolded = false;
+	grand_he->has_children = false;
+	grand_he->nr_rows = 0;
+	grand_he->row_offset = 0;
+
+	/* Initialize stat structures */
+	memset(&grand_he->stat, 0, sizeof(grand_he->stat));
+	grand_he->hroot_in = RB_ROOT_CACHED;
+	grand_he->hroot_out = RB_ROOT_CACHED;
+	INIT_LIST_HEAD(&grand_he->pairs.node);
+
+	/* Set hierarchy pointers */
+	grand_he->hpp_list = &c2c.symbol_hists.list;
+
+	/* Copy statistics from symbol access data */
+	memcpy(&grand_c2c->stats, &child_access->stats, sizeof(grand_c2c->stats));
+	memcpy(&grand_c2c->cstats, &child_access->cstats, sizeof(grand_c2c->cstats));
+
+	/* Calculate display statistics */
+	grand_he->stat.nr_events = HITM_COUNT(&grand_c2c->stats) +
+				   grand_c2c->stats.lcl_peer + grand_c2c->stats.rmt_peer;
+	grand_he->stat.period = grand_he->stat.nr_events;
+	grand_he->stat.weight1 = HITM_COUNT(&grand_c2c->stats);
+
+	/* Initialize stat_acc for callchain accumulation if needed */
+	if (symbol_conf.cumulate_callchain) {
+		grand_he->stat_acc = calloc(1, sizeof(struct he_stat));
+		if (!grand_he->stat_acc)
+			return -ENOMEM;
+		memcpy(grand_he->stat_acc, &grand_he->stat, sizeof(struct he_stat));
+	}
+
+	return 0;
+}
+
+/**
+ * cleanup_grandchild_entry - Clean up resources for a grandchild hist_entry
+ * @grand_he: The grandchild hist_entry to clean up
+ * @grand_c2c: The corresponding c2c_hist_entry
+ */
+static void cleanup_grandchild_entry(struct hist_entry *grand_he,
+				     struct c2c_hist_entry *grand_c2c)
+{
+	if (grand_he->mem_info)
+		mem_info__put(grand_he->mem_info);
+	if (grand_he->stat_acc)
+		free(grand_he->stat_acc);
+	free(grand_c2c);
 }
 
 /**
@@ -259,12 +332,12 @@ static struct hist_entry *create_symbol_child_entry(struct hist_entry *parent_he
 	memset(&child_he->stat, 0, sizeof(child_he->stat));
 
 	/* Set stat values based on c2c stats */
-	child_he->stat.nr_events = rel_sym->stats.rmt_hitm + rel_sym->stats.lcl_hitm +
+	child_he->stat.nr_events = HITM_COUNT(&rel_sym->stats) +
 				   rel_sym->stats.rmt_peer + rel_sym->stats.lcl_peer;
 	child_he->stat.period = child_he->stat.nr_events;
 
 	/* These weight fields are used by some columns */
-	child_he->stat.weight1 = rel_sym->stats.rmt_hitm + rel_sym->stats.lcl_hitm;
+	child_he->stat.weight1 = HITM_COUNT(&rel_sym->stats);
 
 	/* Initialize stat_acc - allocate if needed */
 	if (symbol_conf.cumulate_callchain) {
@@ -294,12 +367,6 @@ static struct hist_entry *create_symbol_child_entry(struct hist_entry *parent_he
 
 	return child_he;
 }
-
-/*
- * ============================================================================
- * Cacheline Symbol Index Management
- * ============================================================================
- */
 
 /**
  * build_cacheline_symbol_index - Build index mapping cachelines to accessing symbols
@@ -461,12 +528,6 @@ void cleanup_cacheline_symbol_index(void)
 	}
 }
 
-/*
- * ============================================================================
- * Symbol Children Population
- * ============================================================================
- */
-
 /**
  * populate_cacheline_grandchildren - Populate cacheline grandchildren for a symbol child
  * @parent_he: Top-level parent histogram entry
@@ -512,47 +573,13 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 			if (!grand_c2c)
 				break;
 
-			init_c2c_he_related_symbols(grand_c2c);
 			grand_he = &grand_c2c->he;
-			/* copy ms from cacheline entry, but clear sym to print cacheline address */
-			memcpy(&grand_he->ms, &cl_entry->he_cl->ms, sizeof(struct map_symbol));
-			grand_he->ms.sym = NULL;
-			grand_he->mem_info = mem_info__get(cl_entry->he_cl->mem_info);
-			grand_he->thread = cl_entry->he_cl->thread;
-			grand_he->cpumode = cl_entry->he_cl->cpumode;
-			grand_he->cpu = cl_entry->he_cl->cpu;
-			grand_he->socket = cl_entry->he_cl->socket;
-			grand_he->parent_he = child_he;
-			grand_he->depth = child_he->depth + 1;
-			grand_he->leaf = true;
-			grand_he->hists = &c2c.symbol_hists.hists;
-			grand_he->filtered = false;
-			grand_he->unfolded = false;
-			grand_he->has_children = false;
-			grand_he->nr_rows = 0;
-			grand_he->row_offset = 0;
-			memset(&grand_he->stat, 0, sizeof(grand_he->stat));
-			grand_he->hroot_in = RB_ROOT_CACHED;
-			grand_he->hroot_out = RB_ROOT_CACHED;
-			INIT_LIST_HEAD(&grand_he->pairs.node);
 
-			/* Initialize hierarchy pointers for grandchild */
-			grand_he->hpp_list = &c2c.symbol_hists.list;
-
-			/* Use pre-computed stats from index - eliminates redundant traversal */
-			memcpy(&grand_c2c->stats, &child_access->stats, sizeof(grand_c2c->stats));
-			memcpy(&grand_c2c->cstats, &child_access->cstats, sizeof(grand_c2c->cstats));
-			/* stats for columns alignment */
-			grand_he->stat.nr_events = grand_c2c->stats.lcl_hitm + grand_c2c->stats.rmt_hitm +
-						grand_c2c->stats.lcl_peer + grand_c2c->stats.rmt_peer;
-			grand_he->stat.period = grand_he->stat.nr_events;
-			grand_he->stat.weight1 = grand_c2c->stats.rmt_hitm + grand_c2c->stats.lcl_hitm;
-
-			/* Initialize stat_acc for grandchild if needed */
-			if (symbol_conf.cumulate_callchain) {
-				grand_he->stat_acc = calloc(1, sizeof(struct he_stat));
-				if (grand_he->stat_acc)
-					memcpy(grand_he->stat_acc, &grand_he->stat, sizeof(struct he_stat));
+			/* Initialize grandchild hist_entry using helper function */
+			if (init_grandchild_hist_entry(grand_he, grand_c2c, cl_entry,
+						       child_he, child_access) != 0) {
+				cleanup_grandchild_entry(grand_he, grand_c2c);
+				break;
 			}
 
 			/* push into temp array */
@@ -562,19 +589,11 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 
 				if (!ni) {
 					/* Clean up the current grand_c2c being constructed */
-					if (grand_he->mem_info)
-						mem_info__put(grand_he->mem_info);
-					if (grand_he->stat_acc)
-						free(grand_he->stat_acc);
-					free(grand_c2c);
+					cleanup_grandchild_entry(grand_he, grand_c2c);
 
 					/* Free all previously allocated grand_c2c structures with proper cleanup */
 					for (int j = 0; j < items_cnt; j++) {
-						if (items[j].grand_he->mem_info)
-							mem_info__put(items[j].grand_he->mem_info);
-						if (items[j].grand_he->stat_acc)
-							free(items[j].grand_he->stat_acc);
-						free(items[j].grand_c2c);
+						cleanup_grandchild_entry(items[j].grand_he, items[j].grand_c2c);
 					}
 					free(items);
 					return items_cnt;  /* Return what we have so far */
@@ -688,12 +707,6 @@ void populate_symbol_children(struct hist_entry *he)
 	}
 }
 
-/*
- * ============================================================================
- * Symbol Association Building
- * ============================================================================
- */
-
 /**
  * build_symbol_associations - Build associations between symbols sharing cachelines
  *
@@ -734,12 +747,12 @@ static void build_symbol_associations(void)
 		int i, j;
 
 		/* Skip cachelines without HITM events */
-		if ((c2c_he_cl->stats.rmt_hitm + c2c_he_cl->stats.lcl_hitm) == 0)
+		if (HITM_COUNT(&c2c_he_cl->stats) == 0)
 			continue;
 
 		/* Collect all (symbol, address) pairs that accessed this cacheline with HITM */
 		for (sa = cl_entry->symbol_accesses; sa; sa = sa->next) {
-			if (sa->sym && (sa->stats.rmt_hitm + sa->stats.lcl_hitm) > 0) {
+			if (sa->sym && HITM_COUNT(&sa->stats) > 0) {
 				uint64_t iaddr = sa->iaddr ? sa->iaddr : sa->sym->start;
 				/* Add (symbol, iaddr) pair to list if not already there */
 				bool found = false;
@@ -893,12 +906,6 @@ static void build_symbol_associations(void)
 		nd_sym = rb_next(nd_sym);
 	}
 }
-
-/*
- * ============================================================================
- * Symbol Histogram Building
- * ============================================================================
- */
 
 /**
  * calculate_symbol_total_cycles - Calculate total cycles for a single c2c_hist_entry
@@ -1092,12 +1099,6 @@ int build_symbol_hists(struct perf_env *env)
 
 	return 0;
 }
-
-/*
- * ============================================================================
- * Symbol Browser UI Components
- * ============================================================================
- */
 
 /**
  * c2c_symbol_browser__title - Generate title for symbol browser
