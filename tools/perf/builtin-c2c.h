@@ -343,6 +343,21 @@ static inline void c2c_he_invalidate_total_cycles_cache(struct c2c_hist_entry *c
 }
 
 /**
+ * calculate_symbol_total_cycles - Calculate total cycles for a single c2c_hist_entry
+ * @c2c_he: C2C histogram entry to calculate cycles for
+ *
+ * Returns: Total cycles for the symbol
+ */
+uint64_t calculate_symbol_total_cycles(struct c2c_hist_entry *c2c_he);
+
+/**
+ * get_total_cycles_all_symbols - Calculate total cycles for all symbols
+ *
+ * Returns: Total cycles across all symbols
+ */
+uint64_t get_total_cycles_all_symbols(void);
+
+/**
  * c2c_hists__init - Initialize C2C histograms
  * @hists: C2C hists to initialize
  * @sort: Sort string

@@ -913,7 +913,7 @@ static void build_symbol_associations(void)
  *
  * Returns the total cycles, using cached value if available
  */
-static uint64_t calculate_symbol_total_cycles(struct c2c_hist_entry *c2c_he)
+uint64_t calculate_symbol_total_cycles(struct c2c_hist_entry *c2c_he)
 {
 	uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load;
 
@@ -938,7 +938,7 @@ static uint64_t calculate_symbol_total_cycles(struct c2c_hist_entry *c2c_he)
  *
  * Returns the total cycles across all symbols, using cached value if available
  */
-static uint64_t get_total_cycles_all_symbols(void)
+uint64_t get_total_cycles_all_symbols(void)
 {
 	struct rb_node *nd;
 	uint64_t total_cycles = 0;

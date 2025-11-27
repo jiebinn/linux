@@ -2014,27 +2014,6 @@ cycles_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
 }
 
-/* Helper function to calculate total cycles for a single c2c_hist_entry */
-static uint64_t calculate_symbol_total_cycles(struct c2c_hist_entry *c2c_he)
-{
-	uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load;
-
-	/* Return cached value if available */
-	if (c2c_he->total_cycles_valid)
-		return c2c_he->total_cycles;
-
-	cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
-	cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
-	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
-	cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
-
-	/* Cache the result */
-	c2c_he->total_cycles = cycles_rmt + cycles_lcl + cycles_load;
-	c2c_he->total_cycles_valid = true;
-
-	return c2c_he->total_cycles;
-}
-
 static int
 cycles_total_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		   struct hist_entry *he)
@@ -2072,30 +2051,6 @@ cnt_other_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	}
 
 	return scnprintf(hpp->buf, hpp->size, "%*llu", width, other_load);
-}
-
-/* Function to calculate total cycles for all symbols for percentage calculation */
-static uint64_t get_total_cycles_all_symbols(void)
-{
-	struct rb_node *nd;
-	uint64_t total_cycles = 0;
-
-	/* Use cached value if available to avoid O(n) scan per row */
-	if (c2c.symbol_total_cycles_valid)
-		return c2c.symbol_total_cycles;
-
-	nd = rb_first_cached(&c2c.symbol_hists.hists.entries);
-	while (nd) {
-		struct hist_entry *he = rb_entry(nd, struct hist_entry, rb_node);
-		struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
-
-		total_cycles += calculate_symbol_total_cycles(c2c_he);
-		nd = rb_next(nd);
-	}
-
-	c2c.symbol_total_cycles = total_cycles;
-	c2c.symbol_total_cycles_valid = true;
-	return total_cycles;
 }
 
 static int
@@ -3311,7 +3266,7 @@ static int ui_quirks(void)
 
 	/* Fix the zero line for offset column. */
 	buf = fill_line(nodestr, dim_offset.width +
-				 dim_offset_node.width +
+			         dim_offset_node.width +
 				 dim_dcacheline_count.width + 4);
 	if (!buf)
 		return -ENOMEM;
