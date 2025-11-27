@@ -2883,14 +2883,14 @@ static int perf_c2c__hists_browse(struct hists *hists, struct perf_session *sess
 			if (active_browser == cl_browser && active_browser->he_selection) {
 				/* In cacheline view, directly browse the selected cacheline */
 				perf_c2c__browse_cacheline(active_browser->he_selection);
-			} else if (active_browser == &sym_browser->hb && active_browser->he_selection) {
+			} else if (sym_browser && active_browser == &sym_browser->hb && active_browser->he_selection) {
 				/* In symbol view, delegate to symbol browser handler */
 				c2c_symbol_browser__browse_cacheline_detail(sym_browser, active_browser->he_selection, hists);
 			}
 			break;
 		case 'e':
 		case '+':
-			if (active_browser == &sym_browser->hb)
+			if (sym_browser && active_browser == &sym_browser->hb)
 				c2c_symbol_browser__handle_expand(sym_browser);
 			break;
 		case '\t':
