@@ -155,8 +155,6 @@ struct hist_entry_ops c2c_entry_ops = {
 	.free	= c2c_he_free,
 };
 
-/* c2c_hists__init is declared in builtin-c2c.h */
-
 static struct c2c_hists*
 he__get_c2c_hists(struct hist_entry *he,
 		  const char *sort,
@@ -360,7 +358,6 @@ static const char * const __usage_report[] = {
 
 static const char * const *report_c2c_usage = __usage_report;
 
-/* Forward declarations - dimensions defined later in this file */
 struct c2c_dimension dim_symbol;
 struct c2c_dimension dim_srcline;
 
@@ -1122,11 +1119,12 @@ node_entry(struct perf_hpp_fmt *fmt __maybe_unused, struct perf_hpp *hpp,
 	bool first = true;
 	int node;
 	int ret = 0;
-	DECLARE_BITMAP(set, c2c.cpus_cnt);
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
 	for (node = 0; node < c2c.nodes_cnt; node++) {
+		DECLARE_BITMAP(set, c2c.cpus_cnt);
+
 		bitmap_zero(set, c2c.cpus_cnt);
 		bitmap_and(set, c2c_he->cpuset, c2c.nodes[node], c2c.cpus_cnt);
 
@@ -1354,7 +1352,7 @@ static struct c2c_dimension dim_iaddr = {
 	.name		= "iaddr",
 	.cmp		= iaddr_cmp,
 	.entry		= iaddr_entry,
-	.width		= 26,
+	.width		= 18,
 };
 
 static struct c2c_dimension dim_tot_hitm = {
@@ -1493,7 +1491,6 @@ static struct c2c_dimension dim_cl_stores_na = {
 	.width		= 7,
 };
 
-
 static struct c2c_dimension dim_ld_fbhit = {
 	.header		= HEADER_SPAN("----- Core Load Hit -----", "FB", 2),
 	.name		= "ld_fbhit",
@@ -1628,22 +1625,6 @@ static struct c2c_dimension dim_percent_stores_na = {
 	.width		= 7,
 };
 
-static struct c2c_dimension dim_total_stores = {
-	.header		= HEADER_LOW("Stores"),
-	.name		= "total_stores",
-	.cmp		= store_cmp,
-	.entry		= total_stores_entry,
-	.width		= 14,
-};
-
-static struct c2c_dimension dim_cacheline_symbol = {
-	.header		= HEADER_LOW("Cacheline"),
-	.name		= "cacheline_symbol",
-	.cmp		= dcacheline_cmp,
-	.entry		= cacheline_symbol_entry,
-	.width		= 18,
-};
-
 static struct c2c_dimension dim_dram_lcl = {
 	.header		= HEADER_SPAN("--- Load Dram ----", "Lcl", 1),
 	.name		= "dram_lcl",
@@ -1741,7 +1722,6 @@ static struct c2c_dimension dim_cpucnt = {
 	.width		= 8,
 };
 
-
 struct c2c_dimension dim_srcline = {
 	.name		= "cl_srcline",
 	.se		= &sort_srcline,
@@ -1810,8 +1790,6 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_percent_stores_l1hit,
 	&dim_percent_stores_l1miss,
 	&dim_percent_stores_na,
-	&dim_total_stores,
-	&dim_cacheline_symbol,
 	&dim_dram_lcl,
 	&dim_dram_rmt,
 	&dim_pid,
