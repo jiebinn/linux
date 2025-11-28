@@ -857,47 +857,6 @@ PERCENT_FN(st_l1hit)
 PERCENT_FN(st_l1miss)
 PERCENT_FN(st_na)
 
-/* Simple percentage functions for cacheline offsets view */
-static int
-percent_cl_stores_l1hit_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-			       struct hist_entry *he)
-{
-	int width = c2c_width(fmt, hpp, he->hists);
-	double per = percent(he_stats(he)->st_l1hit, total_stats(he)->st_l1hit);
-	char buf[10];
-
-	return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
-}
-
-static int
-percent_cl_stores_l1hit_color(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-			       struct hist_entry *he)
-{
-	return percent_color(fmt, hpp, he, percent_st_l1hit);
-}
-
-static int
-percent_cl_stores_l1miss_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-				struct hist_entry *he)
-{
-	int width = c2c_width(fmt, hpp, he->hists);
-	double per = PERCENT(he, st_l1miss);
-	char buf[10];
-
-	return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
-}
-
-static int
-percent_cl_stores_na_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-			    struct hist_entry *he)
-{
-	int width = c2c_width(fmt, hpp, he->hists);
-	double per = PERCENT(he, st_na);
-	char buf[10];
-
-	return scnprintf(hpp->buf, hpp->size, "%*s", width, PERC_STR(buf, per));
-}
-
 static int
 percent_rmt_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		       struct hist_entry *he)
@@ -1534,31 +1493,6 @@ static struct c2c_dimension dim_cl_stores_na = {
 	.width		= 7,
 };
 
-/* New percentage versions for cacheline view */
-static struct c2c_dimension dim_percent_cl_stores_l1hit = {
-	.header		= HEADER_SPAN("------ Store Refs % -----", "L1 Hit", 2),
-	.name		= "percent_cl_stores_l1hit",
-	.cmp		= st_l1hit_cmp,
-	.entry		= percent_cl_stores_l1hit_entry,
-	.color		= percent_cl_stores_l1hit_color,
-	.width		= 7,
-};
-
-static struct c2c_dimension dim_percent_cl_stores_l1miss = {
-	.header		= HEADER_SPAN_LOW("L1 Miss"),
-	.name		= "percent_cl_stores_l1miss",
-	.cmp		= percent_stores_l1miss_cmp,
-	.entry		= percent_cl_stores_l1miss_entry,
-	.width		= 7,
-};
-
-static struct c2c_dimension dim_percent_cl_stores_na = {
-	.header		= HEADER_SPAN_LOW("N/A"),
-	.name		= "percent_cl_stores_na",
-	.cmp		= percent_stores_na_cmp,
-	.entry		= percent_cl_stores_na_entry,
-	.width		= 7,
-};
 
 static struct c2c_dimension dim_ld_fbhit = {
 	.header		= HEADER_SPAN("----- Core Load Hit -----", "FB", 2),
@@ -1807,94 +1741,6 @@ static struct c2c_dimension dim_cpucnt = {
 	.width		= 8,
 };
 
-/* New dimensions for latency and cycles calculations with English naming */
-static struct c2c_dimension dim_latency_rmt_hitm = {
-	.header		= HEADER_SPAN("------ Latency (cycles) ------", "Rmt HITM", 2),
-	.name		= "latency_rmt_hitm",
-	.cmp		= empty_cmp,
-	.entry		= mean_rmt_entry,
-	.width		= 9,
-};
-
-static struct c2c_dimension dim_latency_lcl_hitm = {
-	.header		= HEADER_SPAN_LOW("Lcl HITM"),
-	.name		= "latency_lcl_hitm",
-	.cmp		= empty_cmp,
-	.entry		= mean_lcl_entry,
-	.width		= 9,
-};
-
-static struct c2c_dimension dim_latency_load = {
-	.header		= HEADER_SPAN_LOW("Load"),
-	.name		= "latency_load",
-	.cmp		= empty_cmp,
-	.entry		= mean_load_entry,
-	.width		= 9,
-};
-
-static struct c2c_dimension dim_cnt_rmt_hitm = {
-	.header		= HEADER_SPAN("-------- Count --------", "Rmt HITM", 2),
-	.name		= "cnt_rmt_hitm",
-	.cmp		= empty_cmp,
-	.entry		= rmt_hitm_entry,
-	.width		= 9,
-};
-
-static struct c2c_dimension dim_cnt_lcl_hitm = {
-	.header		= HEADER_SPAN_LOW("Lcl HITM"),
-	.name		= "cnt_lcl_hitm",
-	.cmp		= empty_cmp,
-	.entry		= lcl_hitm_entry,
-	.width		= 9,
-};
-
-static struct c2c_dimension dim_cnt_other_load = {
-	.header		= HEADER_SPAN_LOW("Load"),
-	.name		= "cnt_other_load",
-	.cmp		= empty_cmp,
-	.entry		= cnt_other_load_entry,
-	.width		= 9,
-};
-
-static struct c2c_dimension dim_cycles_rmt_hitm = {
-	.header		= HEADER_SPAN("------- Total Cycles -------", "Rmt HITM", 2),
-	.name		= "cycles_rmt_hitm",
-	.cmp		= empty_cmp,
-	.entry		= cycles_rmt_hitm_entry,
-	.width		= 10,
-};
-
-static struct c2c_dimension dim_cycles_lcl_hitm = {
-	.header		= HEADER_SPAN_LOW("Lcl HITM"),
-	.name		= "cycles_lcl_hitm",
-	.cmp		= empty_cmp,
-	.entry		= cycles_lcl_hitm_entry,
-	.width		= 10,
-};
-
-static struct c2c_dimension dim_cycles_load = {
-	.header		= HEADER_SPAN_LOW("Load"),
-	.name		= "cycles_load",
-	.cmp		= empty_cmp,
-	.entry		= cycles_load_entry,
-	.width		= 10,
-};
-
-static struct c2c_dimension dim_cycles_total = {
-	.header		= HEADER_SPAN_LOW("Total"),
-	.name		= "cycles_total",
-	.cmp		= empty_cmp,
-	.entry		= cycles_total_entry,
-	.width		= 11,
-};
-
-static struct c2c_dimension dim_cycles_percent = {
-	.header		= HEADER_BOTH("Cycles", "Percent"),
-	.name		= "cycles_percent",
-	.cmp		= cycles_percent_cmp,
-	.entry		= cycles_percent_entry,
-	.width		= 8,
-};
 
 struct c2c_dimension dim_srcline = {
 	.name		= "cl_srcline",
@@ -1949,9 +1795,6 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_cl_stores_l1hit,
 	&dim_cl_stores_l1miss,
 	&dim_cl_stores_na,
-	&dim_percent_cl_stores_l1hit,
-	&dim_percent_cl_stores_l1miss,
-	&dim_percent_cl_stores_na,
 	&dim_ld_fbhit,
 	&dim_ld_l1hit,
 	&dim_ld_l2hit,
@@ -1982,17 +1825,6 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_mean_lcl_peer,
 	&dim_mean_load,
 	&dim_cpucnt,
-	&dim_latency_rmt_hitm,
-	&dim_latency_lcl_hitm,
-	&dim_latency_load,
-	&dim_cnt_rmt_hitm,
-	&dim_cnt_lcl_hitm,
-	&dim_cnt_other_load,
-	&dim_cycles_rmt_hitm,
-	&dim_cycles_lcl_hitm,
-	&dim_cycles_load,
-	&dim_cycles_total,
-	&dim_cycles_percent,
 	&dim_srcline,
 	&dim_dcacheline_idx,
 	&dim_dcacheline_num,
