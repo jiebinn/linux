@@ -1560,3 +1560,32 @@ void free_child_entries(struct hist_entry *parent_he)
 		nd = next;
 	}
 }
+
+/*
+ * Symbol view dimensions - moved from builtin-c2c.c since these are
+ * specifically used in the symbol view browser
+ */
+
+struct c2c_dimension dim_cycles_percent = {
+	.header		= HEADER_BOTH("Cycles", "Percent"),
+	.name		= "cycles_percent",
+	.cmp		= cycles_percent_cmp,
+	.entry		= cycles_percent_entry,
+	.width		= 8,
+};
+
+struct c2c_dimension dim_total_stores = {
+	.header		= HEADER_BOTH("Total", "Stores"),
+	.name		= "total_stores",
+	.cmp		= store_cmp,
+	.entry		= total_stores_entry,
+	.width		= 8,
+};
+
+struct c2c_dimension dim_cacheline_symbol = {
+	.header		= HEADER_LOW("Cacheline"),
+	.name		= "cacheline_symbol",
+	.cmp		= empty_cmp,
+	.entry		= cacheline_symbol_entry,
+	.width		= 16,
+};

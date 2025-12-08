@@ -592,7 +592,7 @@ __f ## _entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,	\
 }
 
 #define STAT_FN_CMP(__f)						\
-static int64_t								\
+int64_t									\
 __f ## _cmp(struct perf_hpp_fmt *fmt __maybe_unused,			\
 	    struct hist_entry *left, struct hist_entry *right)		\
 {									\
@@ -1090,7 +1090,7 @@ pid_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	return thread__pid(left->thread) - thread__pid(right->thread);
 }
 
-static int64_t
+int64_t
 empty_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	  struct hist_entry *left __maybe_unused,
 	  struct hist_entry *right __maybe_unused)
@@ -1722,6 +1722,7 @@ static struct c2c_dimension dim_cpucnt = {
 	.width		= 8,
 };
 
+
 struct c2c_dimension dim_srcline = {
 	.name		= "cl_srcline",
 	.se		= &sort_srcline,
@@ -1803,6 +1804,9 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_mean_lcl_peer,
 	&dim_mean_load,
 	&dim_cpucnt,
+	&dim_cycles_percent,
+	&dim_total_stores,
+	&dim_cacheline_symbol,
 	&dim_srcline,
 	&dim_dcacheline_idx,
 	&dim_dcacheline_num,

@@ -23,6 +23,24 @@
 #define SYMBOL_WIDTH 30
 #define C2C_HEADER_MAX 2
 
+/* Header macros for dimension definitions */
+#define HEADER_LOW(__h)			\
+	{				\
+		.line[1] = {		\
+			.text = __h,	\
+		},			\
+	}
+
+#define HEADER_BOTH(__h0, __h1)		\
+	{				\
+		.line[0] = {		\
+			.text = __h0,	\
+		},			\
+		.line[1] = {		\
+			.text = __h1,	\
+		},			\
+	}
+
 /**
  * struct c2c_header - Column header definition for C2C display
  * @line: Array of header lines with text and span
@@ -354,6 +372,42 @@ int cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 			 struct hist_entry *he);
 int64_t cycles_percent_cmp(struct perf_hpp_fmt *fmt,
 			   struct hist_entry *left, struct hist_entry *right);
+int64_t empty_cmp(struct perf_hpp_fmt *fmt,
+		  struct hist_entry *left, struct hist_entry *right);
+
+/* STAT_FN generated comparison functions */
+int64_t rmt_hitm_cmp(struct perf_hpp_fmt *fmt,
+		     struct hist_entry *left, struct hist_entry *right);
+int64_t lcl_hitm_cmp(struct perf_hpp_fmt *fmt,
+		     struct hist_entry *left, struct hist_entry *right);
+int64_t rmt_peer_cmp(struct perf_hpp_fmt *fmt,
+		     struct hist_entry *left, struct hist_entry *right);
+int64_t lcl_peer_cmp(struct perf_hpp_fmt *fmt,
+		     struct hist_entry *left, struct hist_entry *right);
+int64_t tot_peer_cmp(struct perf_hpp_fmt *fmt,
+		     struct hist_entry *left, struct hist_entry *right);
+int64_t store_cmp(struct perf_hpp_fmt *fmt,
+		  struct hist_entry *left, struct hist_entry *right);
+int64_t st_l1hit_cmp(struct perf_hpp_fmt *fmt,
+		     struct hist_entry *left, struct hist_entry *right);
+int64_t st_l1miss_cmp(struct perf_hpp_fmt *fmt,
+		      struct hist_entry *left, struct hist_entry *right);
+int64_t st_na_cmp(struct perf_hpp_fmt *fmt,
+		  struct hist_entry *left, struct hist_entry *right);
+int64_t ld_fbhit_cmp(struct perf_hpp_fmt *fmt,
+		     struct hist_entry *left, struct hist_entry *right);
+int64_t ld_l1hit_cmp(struct perf_hpp_fmt *fmt,
+		     struct hist_entry *left, struct hist_entry *right);
+int64_t ld_l2hit_cmp(struct perf_hpp_fmt *fmt,
+		     struct hist_entry *left, struct hist_entry *right);
+int64_t ld_llchit_cmp(struct perf_hpp_fmt *fmt,
+		      struct hist_entry *left, struct hist_entry *right);
+int64_t rmt_hit_cmp(struct perf_hpp_fmt *fmt,
+		    struct hist_entry *left, struct hist_entry *right);
+int64_t lcl_dram_cmp(struct perf_hpp_fmt *fmt,
+		     struct hist_entry *left, struct hist_entry *right);
+int64_t rmt_dram_cmp(struct perf_hpp_fmt *fmt,
+		     struct hist_entry *left, struct hist_entry *right);
 
 /**
  * struct c2c_symbol_browser - Symbol browser for C2C analysis
@@ -532,5 +586,13 @@ void free_child_entries(struct hist_entry *parent_he);
  * c2c_entry_ops - Histogram entry operations for C2C
  */
 extern struct hist_entry_ops c2c_entry_ops;
+
+/**
+ * Symbol view dimensions - moved to c2c-symbol.c since they are
+ * specifically used in the symbol view browser
+ */
+extern struct c2c_dimension dim_cycles_percent;
+extern struct c2c_dimension dim_total_stores;
+extern struct c2c_dimension dim_cacheline_symbol;
 
 #endif /* _PERF_BUILTIN_C2C_H_ */
