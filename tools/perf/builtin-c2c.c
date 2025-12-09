@@ -1333,7 +1333,7 @@ static struct c2c_dimension dim_iaddr = {
 	.name		= "iaddr",
 	.cmp		= iaddr_cmp,
 	.entry		= iaddr_entry,
-	.width		= 24,
+	.width		= 18,
 };
 
 static struct c2c_dimension dim_tot_hitm = {
@@ -2643,7 +2643,6 @@ static int perf_c2c__hists_browse(struct hists *hists, struct perf_session *sess
 	ret = build_symbol_hists(perf_session__env(session));
 	if (ret) {
 		ui__error("Failed to build symbol view (ret=%d)\n", ret);
-		/* Continue with cacheline view only */
 	}
 
 	cl_browser = perf_c2c_browser__new(hists);
@@ -2654,11 +2653,8 @@ static int perf_c2c__hists_browse(struct hists *hists, struct perf_session *sess
 	if (!ret) {
 		sym_browser = c2c_symbol_browser__new(&c2c.symbol_hists.hists, session);
 		if (sym_browser == NULL) {
-			hist_browser__delete(cl_browser);
-			return -1;
+			ui__error("Failed to create symbol browser, continuing with cacheline view only\n");
 		}
-	} else {
-		sym_browser = NULL;
 	}
 
 	c2c_browser__update_nr_entries(cl_browser);

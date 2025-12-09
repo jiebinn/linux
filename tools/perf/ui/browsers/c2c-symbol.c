@@ -198,10 +198,10 @@ cycles_rmt_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 
 	if (he->parent_he) {
 		/* Indent child metrics by 4 spaces */
-		return scnprintf(hpp->buf, hpp->size, "    %llu", cycles);
+		return scnprintf(hpp->buf, hpp->size, "    %" PRIu64, cycles);
 	}
 
-	return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
+	return scnprintf(hpp->buf, hpp->size, "%*" PRIu64, width, cycles);
 }
 
 /**
@@ -226,7 +226,7 @@ cycles_lcl_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
 	}
 
-	return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
+	return scnprintf(hpp->buf, hpp->size, "%*" PRIu64, width, cycles);
 }
 
 /**
@@ -238,10 +238,12 @@ cycles_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 {
 	struct c2c_hist_entry *c2c_he;
 	int width = c2c_width(fmt, hpp, he->hists);
-	uint64_t cycles, other_load;
+	uint64_t cycles, other_load, total_hitm;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
-	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
+	/* Prevent unsigned underflow by checking before subtraction */
+	total_hitm = (uint64_t)c2c_he->stats.rmt_hitm + c2c_he->stats.lcl_hitm;
+	other_load = (c2c_he->stats.load >= total_hitm) ? c2c_he->stats.load - total_hitm : 0;
 	cycles = avg_stats(&c2c_he->cstats.load) * other_load;
 
 	if (he->parent_he) {
@@ -252,7 +254,7 @@ cycles_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
 	}
 
-	return scnprintf(hpp->buf, hpp->size, "%*llu", width, cycles);
+	return scnprintf(hpp->buf, hpp->size, "%*" PRIu64, width, cycles);
 }
 
 /**
@@ -270,9 +272,9 @@ cycles_total_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	total_cycles = calculate_symbol_total_cycles(c2c_he);
 
 	if (he->parent_he)
-		return scnprintf(hpp->buf, hpp->size, "    %llu", total_cycles);
+		return scnprintf(hpp->buf, hpp->size, "    %" PRIu64, total_cycles);
 
-	return scnprintf(hpp->buf, hpp->size, "%*llu", width, total_cycles);
+	return scnprintf(hpp->buf, hpp->size, "%*" PRIu64, width, total_cycles);
 }
 
 /**
@@ -340,7 +342,7 @@ cycles_percent_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	cycles_left = calculate_symbol_total_cycles(c2c_left);
 	cycles_right = calculate_symbol_total_cycles(c2c_right);
 
-	return cycles_left - cycles_right;
+	return (int64_t)cycles_left - (int64_t)cycles_right;
 }
 
 /**
@@ -907,7 +909,7 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 						cleanup_grandchild_entry(items[j].grand_he, items[j].grand_c2c);
 					}
 					free(items);
-					return items_cnt;  /* Return what we have so far */
+					return 0;  /* All items were cleaned up, return 0 */
 				}
 				items = ni;
 				items_cap = new_cap;
@@ -1079,15 +1081,16 @@ static void build_symbol_associations(void)
 				if (!found) {
 					if (symbol_count >= symbol_capacity) {
 						struct symbol_addr_pair *new_symbols;
+						int new_capacity = symbol_capacity ? symbol_capacity * 2 : 4;
 
-						symbol_capacity = symbol_capacity ? symbol_capacity * 2 : 4;
 						new_symbols = realloc(symbols_with_hitm,
-								    symbol_capacity * sizeof(struct symbol_addr_pair));
+								    new_capacity * sizeof(struct symbol_addr_pair));
 						if (!new_symbols) {
 							/* Memory allocation failed, skip this symbol */
 							continue;
 						}
 						symbols_with_hitm = new_symbols;
+						symbol_capacity = new_capacity;
 					}
 					if (symbols_with_hitm) {
 						symbols_with_hitm[symbol_count].sym = sa->sym;
@@ -1226,7 +1229,7 @@ static void build_symbol_associations(void)
  */
 uint64_t calculate_symbol_total_cycles(struct c2c_hist_entry *c2c_he)
 {
-	uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load;
+	uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load, total_hitm;
 
 	/* Return cached value if available */
 	if (c2c_he->total_cycles_valid)
@@ -1234,7 +1237,9 @@ uint64_t calculate_symbol_total_cycles(struct c2c_hist_entry *c2c_he)
 
 	cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
 	cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
-	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
+	/* Prevent unsigned underflow by checking before subtraction */
+	total_hitm = (uint64_t)c2c_he->stats.rmt_hitm + c2c_he->stats.lcl_hitm;
+	other_load = (c2c_he->stats.load >= total_hitm) ? c2c_he->stats.load - total_hitm : 0;
 	cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
 
 	/* Cache the result */
