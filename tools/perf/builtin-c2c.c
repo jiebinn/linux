@@ -496,28 +496,22 @@ offset_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 }
 
 static int
-iaddr_cacheline_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-		      struct hist_entry *he)
+iaddr_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+	    struct hist_entry *he)
 {
 	uint64_t addr = 0;
 	int width = c2c_width(fmt, hpp, he->hists);
 	char buf[20];
 
+	/* Use symbol entry for symbol view */
+	if (he->hists == &c2c.symbol_hists.hists)
+		return iaddr_symbol_entry(fmt, hpp, he);
+
+	/* Default cacheline view */
 	if (he->mem_info)
 		addr = mem_info__iaddr(he->mem_info)->addr;
 
 	return scnprintf(hpp->buf, hpp->size, "%*s", width, HEX_STR(buf, addr));
-}
-
-static int
-iaddr_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-	    struct hist_entry *he)
-{
-	/* Use simplified entry for cacheline view, complex entry for symbol view */
-	if (he->hists == &c2c.symbol_hists.hists)
-		return iaddr_symbol_entry(fmt, hpp, he);
-	else
-		return iaddr_cacheline_entry(fmt, hpp, he);
 }
 
 static int64_t

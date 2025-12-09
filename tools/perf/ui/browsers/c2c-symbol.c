@@ -286,10 +286,12 @@ cnt_other_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 {
 	struct c2c_hist_entry *c2c_he;
 	int width = c2c_width(fmt, hpp, he->hists);
-	uint64_t other_load;
+	uint64_t other_load, total_hitm;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
-	other_load = c2c_he->stats.load - c2c_he->stats.rmt_hitm - c2c_he->stats.lcl_hitm;
+	/* Prevent unsigned underflow by checking before subtraction */
+	total_hitm = (uint64_t)c2c_he->stats.rmt_hitm + c2c_he->stats.lcl_hitm;
+	other_load = (c2c_he->stats.load >= total_hitm) ? c2c_he->stats.load - total_hitm : 0;
 
 	if (he->parent_he) {
 		int out_len = snprintf(NULL, 0, "    %" PRIu64, other_load) + 1;
