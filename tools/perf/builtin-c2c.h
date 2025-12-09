@@ -595,4 +595,8 @@ extern struct c2c_dimension dim_cycles_percent;
 extern struct c2c_dimension dim_total_stores;
 extern struct c2c_dimension dim_cacheline_symbol;
 
+/* Function declarations for symbol view entry functions */
+int iaddr_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		       struct hist_entry *he);
+
 #endif /* _PERF_BUILTIN_C2C_H_ */

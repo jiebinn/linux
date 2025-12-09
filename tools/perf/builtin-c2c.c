@@ -396,11 +396,6 @@ static int c2c_header(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	struct c2c_dimension *dim;
 	const char *text = NULL;
 	int width = c2c_width(fmt, hpp, hists);
-	/* Center align the header text */
-	int text_len;
-	int padding;
-	int left_pad;
-	char centered_text[256];
 
 	c2c_fmt = container_of(fmt, struct c2c_fmt, fmt);
 	dim = c2c_fmt->dim;
@@ -424,18 +419,7 @@ static int c2c_header(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	if (text == NULL)
 		text = "";
 
-	text_len = strlen(text);
-	if (text_len >= width)
-		return scnprintf(hpp->buf, hpp->size, "%-*.*s", width, width, text);
-
-	padding = width - text_len;
-	left_pad = padding / 2;
-
-	/* Create centered text with proper spacing */
-	snprintf(centered_text, sizeof(centered_text), "%*s%s%*s",
-		left_pad, "", text, padding - left_pad, "");
-
-	return scnprintf(hpp->buf, hpp->size, "%-*s", width, centered_text);
+	return scnprintf(hpp->buf, hpp->size, "%*s", width, text);
 }
 
 static int64_t
@@ -512,31 +496,28 @@ offset_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 }
 
 static int
-iaddr_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-	    struct hist_entry *he)
+iaddr_cacheline_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		      struct hist_entry *he)
 {
 	uint64_t addr = 0;
 	int width = c2c_width(fmt, hpp, he->hists);
 	char buf[20];
 
-	/* Hide Code address for cacheline entries */
-	if (he->depth == 2 && he->parent_he && he->parent_he->parent_he)
-		return scnprintf(hpp->buf, hpp->size, "%-*s", width, "");
-
 	if (he->mem_info)
 		addr = mem_info__iaddr(he->mem_info)->addr;
 
-	if (he->parent_he) {
-		/* Indent child addresses */
-		char *hex_str = HEX_STR(buf, addr);
-		int out_len = snprintf(NULL, 0, "    %s", hex_str) + 1;
-		char *out = alloca(out_len);
+	return scnprintf(hpp->buf, hpp->size, "%*s", width, HEX_STR(buf, addr));
+}
 
-		snprintf(out, out_len, "    %s", hex_str);
-		return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
-	}
-
-	return scnprintf(hpp->buf, hpp->size, "%-*s", width, HEX_STR(buf, addr));
+static int
+iaddr_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+	    struct hist_entry *he)
+{
+	/* Use simplified entry for cacheline view, complex entry for symbol view */
+	if (he->hists == &c2c.symbol_hists.hists)
+		return iaddr_symbol_entry(fmt, hpp, he);
+	else
+		return iaddr_cacheline_entry(fmt, hpp, he);
 }
 
 static int64_t
@@ -1352,7 +1333,7 @@ static struct c2c_dimension dim_iaddr = {
 	.name		= "iaddr",
 	.cmp		= iaddr_cmp,
 	.entry		= iaddr_entry,
-	.width		= 18,
+	.width		= 24,
 };
 
 static struct c2c_dimension dim_tot_hitm = {

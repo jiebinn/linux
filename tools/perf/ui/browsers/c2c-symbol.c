@@ -51,21 +51,25 @@ total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	/* Use stats.store as authoritative total stores */
 	uint64_t total = (uint64_t)c2c_he->stats.store;
 	int width = c2c_width(fmt, hpp, he->hists);
+	char buf[32];
 	const char *indent;
-	int out_len;
-	char *out;
+	char indicator;
 
 	/* Hide Stores for parent symbols */
 	if (!he->parent_he)
 		return scnprintf(hpp->buf, hpp->size, "%-*s", width, "");
 
-	/* Calculate space needed and format directly */
+	/* Build the stores string with proper indentation and folding indicator */
 	indent = he->parent_he->parent_he ? "        " : "      ";
-	out_len = snprintf(NULL, 0, "%s%" PRIu64, indent, total) + 1;
-	out = alloca(out_len);
+	indicator = he->has_children ? (he->unfolded ? '-' : '+') : ' ';
 
-	snprintf(out, out_len, "%s%" PRIu64, indent, total);
-	return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+	if (he->has_children) {
+		snprintf(buf, sizeof(buf), "%s%c %" PRIu64, indent, indicator, total);
+	} else {
+		snprintf(buf, sizeof(buf), "%s  %" PRIu64, indent, total);
+	}
+
+	return scnprintf(hpp->buf, hpp->size, "%-*s", width, buf);
 }
 
 /**
@@ -86,17 +90,47 @@ cacheline_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	if (he->mem_info)
 		addr = cl_address(mem_info__daddr(he->mem_info)->addr, chk_double_cl);
 
-	/* Indent cacheline under child symbols to emphasize hierarchy */
-	if (he->parent_he && he->parent_he->parent_he) {
-		char *hex_str = HEX_STR(buf, addr);
-		int out_len = snprintf(NULL, 0, "    %s", hex_str) + 1;
-		char *out = alloca(out_len);
+	return scnprintf(hpp->buf, hpp->size, "%-*s", width, HEX_STR(buf, addr));
+}
 
-		snprintf(out, out_len, "    %s", hex_str);
-		return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
+/**
+ * iaddr_symbol_entry - Render code address for symbol view with hierarchy indicators
+ */
+int
+iaddr_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		   struct hist_entry *he)
+{
+	uint64_t addr = 0;
+	int width = c2c_width(fmt, hpp, he->hists);
+	char buf[32], hex_buf[20];
+
+	if (he->mem_info)
+		addr = mem_info__iaddr(he->mem_info)->addr;
+
+	/* Hide Code address for entries with grandparent (cacheline level) */
+	if (he->parent_he && he->parent_he->parent_he)
+		return scnprintf(hpp->buf, hpp->size, "%-*s", width, "");
+
+	/* Build the address string with proper indentation and folding indicator */
+	if (he->parent_he) {
+		/* Child entries (depth 1) */
+		if (he->has_children) {
+			snprintf(buf, sizeof(buf), "    %c %s",
+				 he->unfolded ? '-' : '+', HEX_STR(hex_buf, addr));
+		} else {
+			snprintf(buf, sizeof(buf), "      %s", HEX_STR(hex_buf, addr));
+		}
+	} else {
+		/* Top-level entries (depth 0) */
+		if (he->has_children) {
+			snprintf(buf, sizeof(buf), "%c %s",
+				 he->unfolded ? '-' : '+', HEX_STR(hex_buf, addr));
+		} else {
+			snprintf(buf, sizeof(buf), "  %s", HEX_STR(hex_buf, addr));
+		}
 	}
 
-	return scnprintf(hpp->buf, hpp->size, "%-*s", width, HEX_STR(buf, addr));
+	return scnprintf(hpp->buf, hpp->size, "%-*s", width, buf);
 }
 
 /**
@@ -120,7 +154,7 @@ symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	}
 
 	/* Hide Symbol for cacheline entries */
-	if (he->depth == 2 && he->parent_he && he->parent_he->parent_he)
+	if (he->parent_he && he->parent_he->parent_he)
 		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
 
 	/* Build the symbol string with proper indentation and folding indicator */
