@@ -583,6 +583,25 @@ int c2c_hists__reinit(struct c2c_hists *hists, const char *output, const char *s
 void free_child_entries(struct hist_entry *parent_he);
 
 /**
+ * c2c_he_init_symbol_support - Initialize symbol view related fields in c2c_hist_entry
+ * @c2c_he: C2C histogram entry to initialize
+ *
+ * Initializes fields required for symbol view functionality including
+ * related symbols list and cached total cycles.
+ */
+void c2c_he_init_symbol_support(struct c2c_hist_entry *c2c_he);
+
+/**
+ * c2c_he_cleanup_symbol_support - Clean up symbol view related resources
+ * @hist_entry: Histogram entry being freed
+ * @c2c_he: C2C histogram entry to clean up
+ *
+ * Frees resources allocated for symbol view functionality including
+ * child entries, related symbols list, and stat accumulation.
+ */
+void c2c_he_cleanup_symbol_support(struct hist_entry *hist_entry, struct c2c_hist_entry *c2c_he);
+
+/**
  * c2c_entry_ops - Histogram entry operations for C2C
  */
 extern struct hist_entry_ops c2c_entry_ops;

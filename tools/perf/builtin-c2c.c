@@ -102,12 +102,8 @@ static void *c2c_he_zalloc(size_t size)
 	init_stats(&c2c_he->cstats.rmt_peer);
 	init_stats(&c2c_he->cstats.load);
 
-	/* Initialize symbol association fields */
-	init_c2c_he_related_symbols(c2c_he);
-
-	/* Initialize cached total cycles */
-	c2c_he->total_cycles = 0;
-	c2c_he->total_cycles_valid = false;
+	/* Initialize symbol view support */
+	c2c_he_init_symbol_support(c2c_he);
 
 	return &c2c_he->he;
 
@@ -121,27 +117,17 @@ out_free:
 static void c2c_he_free(void *he)
 {
 	struct c2c_hist_entry *c2c_he;
-	struct related_symbol *rel_sym, *tmp;
 	struct hist_entry *hist_entry = (struct hist_entry *)he;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
-	/* Free child entries first */
-	free_child_entries(hist_entry);
+	/* Clean up symbol view support */
+	c2c_he_cleanup_symbol_support(hist_entry, c2c_he);
 
 	if (c2c_he->hists) {
 		hists__delete_entries(&c2c_he->hists->hists);
 		zfree(&c2c_he->hists);
 	}
-
-	/* Free related symbols list */
-	list_for_each_entry_safe(rel_sym, tmp, &c2c_he->related_symbols, list) {
-		list_del(&rel_sym->list);
-		free(rel_sym);
-	}
-
-	if (hist_entry->parent_he && symbol_conf.cumulate_callchain && hist_entry->stat_acc)
-		zfree(&hist_entry->stat_acc);
 
 	zfree(&c2c_he->cpuset);
 	zfree(&c2c_he->nodeset);

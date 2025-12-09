@@ -511,6 +511,28 @@ static void cleanup_grandchild_entry(struct hist_entry *grand_he,
 }
 
 /**
+ * cleanup_grandchildren_items - Clean up all items in the grandchildren array
+ * @items: Array of grand_item structures
+ * @items_cnt: Number of items in the array
+ * @current_he: Current hist_entry being constructed (can be NULL)
+ * @current_c2c: Current c2c_hist_entry being constructed (can be NULL)
+ */
+static void cleanup_grandchildren_items(struct grand_item *items, int items_cnt,
+					struct hist_entry *current_he,
+					struct c2c_hist_entry *current_c2c)
+{
+	/* Clean up the current entry being constructed if provided */
+	if (current_he && current_c2c)
+		cleanup_grandchild_entry(current_he, current_c2c);
+
+	/* Clean up all previously allocated grand_c2c structures */
+	for (int j = 0; j < items_cnt; j++) {
+		cleanup_grandchild_entry(items[j].grand_he, items[j].grand_c2c);
+	}
+	free(items);
+}
+
+/**
  * validate_and_prepare_entries - Validate and prepare for populating symbol children
  * @he: Histogram entry to validate
  *
@@ -885,16 +907,18 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 			struct hist_entry *grand_he;
 			u64 child_stores = child_access->stats.store;
 
-			if (!grand_c2c)
-				break;
+			if (!grand_c2c) {
+				cleanup_grandchildren_items(items, items_cnt, NULL, NULL);
+				return 0;
+			}
 
 			grand_he = &grand_c2c->he;
 
 			/* Initialize grandchild hist_entry using helper function */
 			if (init_grandchild_hist_entry(grand_he, grand_c2c, cl_entry,
 						       child_he, child_access) != 0) {
-				cleanup_grandchild_entry(grand_he, grand_c2c);
-				break;
+				cleanup_grandchildren_items(items, items_cnt, grand_he, grand_c2c);
+				return 0;
 			}
 
 			/* push into temp array */
@@ -903,14 +927,7 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 				struct grand_item *ni = realloc(items, new_cap * sizeof(*items));
 
 				if (!ni) {
-					/* Clean up the current grand_c2c being constructed */
-					cleanup_grandchild_entry(grand_he, grand_c2c);
-
-					/* Free all previously allocated grand_c2c structures with proper cleanup */
-					for (int j = 0; j < items_cnt; j++) {
-						cleanup_grandchild_entry(items[j].grand_he, items[j].grand_c2c);
-					}
-					free(items);
+					cleanup_grandchildren_items(items, items_cnt, grand_he, grand_c2c);
 					return 0;  /* All items were cleaned up, return 0 */
 				}
 				items = ni;
@@ -1490,8 +1507,9 @@ int c2c_symbol_browser__handle_expand(struct c2c_symbol_browser *browser)
 		populate_symbol_children(he);
 	}
 
-	/* Toggle the folded state */
-	he->unfolded = !he->unfolded;
+	/* Toggle the folded state only if children were actually created */
+	if (he->has_children)
+		he->unfolded = !he->unfolded;
 
 	/* Update the browser to reflect hierarchy changes */
 	ui_browser__update_nr_entries(&browser->hb.b, browser->hb.hists->nr_entries);
@@ -1630,3 +1648,45 @@ struct c2c_dimension dim_cacheline_symbol = {
 	.entry		= cacheline_symbol_entry,
 	.width		= 16,
 };
+
+/**
+ * c2c_he_init_symbol_support - Initialize symbol view related fields in c2c_hist_entry
+ * @c2c_he: C2C histogram entry to initialize
+ *
+ * Initializes fields required for symbol view functionality including
+ * related symbols list and cached total cycles.
+ */
+void c2c_he_init_symbol_support(struct c2c_hist_entry *c2c_he)
+{
+	/* Initialize symbol association fields */
+	init_c2c_he_related_symbols(c2c_he);
+
+	/* Initialize cached total cycles */
+	c2c_he->total_cycles = 0;
+	c2c_he->total_cycles_valid = false;
+}
+
+/**
+ * c2c_he_cleanup_symbol_support - Clean up symbol view related resources
+ * @hist_entry: Histogram entry being freed
+ * @c2c_he: C2C histogram entry to clean up
+ *
+ * Frees resources allocated for symbol view functionality including
+ * child entries, related symbols list, and stat accumulation.
+ */
+void c2c_he_cleanup_symbol_support(struct hist_entry *hist_entry, struct c2c_hist_entry *c2c_he)
+{
+	struct related_symbol *rel_sym, *tmp;
+
+	/* Free child entries first */
+	free_child_entries(hist_entry);
+
+	/* Free related symbols list */
+	list_for_each_entry_safe(rel_sym, tmp, &c2c_he->related_symbols, list) {
+		list_del(&rel_sym->list);
+		free(rel_sym);
+	}
+
+	if (hist_entry->parent_he && symbol_conf.cumulate_callchain && hist_entry->stat_acc)
+		zfree(&hist_entry->stat_acc);
+}
