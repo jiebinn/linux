@@ -10,27 +10,7 @@
  * - Symbol browser UI components
  */
 
-#include <stdlib.h>
-#include <string.h>
-#include <alloca.h>
-#include <inttypes.h>
-#include <linux/zalloc.h>
-#include <linux/list.h>
-#include <linux/rbtree.h>
-#include <perf/event.h>
-
-#include "../../builtin-c2c.h"
-#include "../browser.h"
-#include "../ui.h"
-#include "../../util/hist.h"
-#include "../../util/sort.h"
-#include "../../util/symbol.h"
-#include "../../util/session.h"
-#include "../../util/mem-info.h"
-#include "../../util/cacheline.h"
-#include "../../util/debug.h"
-#include "../../util/thread.h"
-#include "../../util/addr_location.h"
+#include "../../c2c.h"
 
 /* Helper macros for common C2C operations */
 #define HITM_COUNT(stats) ((stats)->rmt_hitm + (stats)->lcl_hitm)
@@ -1650,13 +1630,13 @@ struct c2c_dimension dim_cacheline_symbol = {
 };
 
 /**
- * c2c_he_init_symbol_support - Initialize symbol view related fields in c2c_hist_entry
+ * c2c_he_init_total_cycles - Initialize symbol view related fields in c2c_hist_entry
  * @c2c_he: C2C histogram entry to initialize
  *
  * Initializes fields required for symbol view functionality including
  * related symbols list and cached total cycles.
  */
-void c2c_he_init_symbol_support(struct c2c_hist_entry *c2c_he)
+void c2c_he_init_total_cycles(struct c2c_hist_entry *c2c_he)
 {
 	/* Initialize symbol association fields */
 	init_c2c_he_related_symbols(c2c_he);
@@ -1667,15 +1647,16 @@ void c2c_he_init_symbol_support(struct c2c_hist_entry *c2c_he)
 }
 
 /**
- * c2c_he_cleanup_symbol_support - Clean up symbol view related resources
+ * c2c_he_free_symbol_view_resources - Clean up symbol view related resources
  * @hist_entry: Histogram entry being freed
  * @c2c_he: C2C histogram entry to clean up
  *
  * Frees resources allocated for symbol view functionality including
  * child entries, related symbols list, and stat accumulation.
  */
-void c2c_he_cleanup_symbol_support(struct hist_entry *hist_entry, struct c2c_hist_entry *c2c_he)
+void c2c_he_free_symbol_view_resources(void *he, struct c2c_hist_entry *c2c_he)
 {
+	struct hist_entry *hist_entry = (struct hist_entry *)he;
 	struct related_symbol *rel_sym, *tmp;
 
 	/* Free child entries first */

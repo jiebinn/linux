@@ -1,12 +1,17 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-#ifndef _PERF_BUILTIN_C2C_H_
-#define _PERF_BUILTIN_C2C_H_ 1
+#ifndef _PERF_C2C_H_
+#define _PERF_C2C_H_ 1
 
 #include <linux/list.h>
+#include <linux/bitmap.h>
+#include <linux/rbtree.h>
+#include <linux/zalloc.h>
 #include <stdbool.h>
-#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include <inttypes.h>
 
+#include "addr_location.h"
 #include "ui/browsers/hists.h"
 #include "util/mem-events.h"
 #include "util/mem2node.h"
@@ -18,6 +23,10 @@
 #include "util/map.h"
 #include "util/maps.h"
 #include "util/sort.h"
+#include "util/mem-info.h"
+#include "util/cacheline.h"
+#include "util/debug.h"
+#include "util/thread.h"
 
 /* Constants */
 #define SYMBOL_WIDTH 30
@@ -583,23 +592,23 @@ int c2c_hists__reinit(struct c2c_hists *hists, const char *output, const char *s
 void free_child_entries(struct hist_entry *parent_he);
 
 /**
- * c2c_he_init_symbol_support - Initialize symbol view related fields in c2c_hist_entry
+ * c2c_he_init_total_cycles - Initialize symbol view related fields in c2c_hist_entry
  * @c2c_he: C2C histogram entry to initialize
  *
  * Initializes fields required for symbol view functionality including
  * related symbols list and cached total cycles.
  */
-void c2c_he_init_symbol_support(struct c2c_hist_entry *c2c_he);
+void c2c_he_init_total_cycles(struct c2c_hist_entry *c2c_he);
 
 /**
- * c2c_he_cleanup_symbol_support - Clean up symbol view related resources
- * @hist_entry: Histogram entry being freed
+ * c2c_he_free_symbol_view_resources - Clean up symbol view related resources
+ * @he: Histogram entry being freed (as void pointer)
  * @c2c_he: C2C histogram entry to clean up
  *
  * Frees resources allocated for symbol view functionality including
  * child entries, related symbols list, and stat accumulation.
  */
-void c2c_he_cleanup_symbol_support(struct hist_entry *hist_entry, struct c2c_hist_entry *c2c_he);
+void c2c_he_free_symbol_view_resources(void *he, struct c2c_hist_entry *c2c_he);
 
 /**
  * c2c_entry_ops - Histogram entry operations for C2C

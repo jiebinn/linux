@@ -11,15 +11,10 @@
  *   Joe Mario <jmario@redhat.com>
  */
 #include <errno.h>
-#include <inttypes.h>
-#include <stdlib.h>
 #include <linux/compiler.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/stringify.h>
-#include <linux/zalloc.h>
-#include <linux/list.h>
-#include <linux/bitmap.h>
 #include <asm/bug.h>
 #include <sys/param.h>
 #include "debug.h"
@@ -27,24 +22,12 @@
 #include <perf/cpumap.h>
 #include <subcmd/pager.h>
 #include <subcmd/parse-options.h>
-#include "addr_location.h"
 #include "map_symbol.h"
-#include "mem-events.h"
-#include "session.h"
-#include "hist.h"
-#include "sort.h"
-#include "tool.h"
-#include "cacheline.h"
 #include "data.h"
 #include "event.h"
 #include "evlist.h"
 #include "evsel.h"
-#include "ui/browsers/hists.h"
-#include "builtin-c2c.h"
-#include "thread.h"
-#include "mem2node.h"
-#include "mem-info.h"
-#include "symbol.h"
+#include "c2c.h"
 #include "ui/ui.h"
 #include "ui/progress.h"
 #include "pmus.h"
@@ -103,7 +86,7 @@ static void *c2c_he_zalloc(size_t size)
 	init_stats(&c2c_he->cstats.load);
 
 	/* Initialize symbol view support */
-	c2c_he_init_symbol_support(c2c_he);
+	c2c_he_init_total_cycles(c2c_he);
 
 	return &c2c_he->he;
 
@@ -117,12 +100,11 @@ out_free:
 static void c2c_he_free(void *he)
 {
 	struct c2c_hist_entry *c2c_he;
-	struct hist_entry *hist_entry = (struct hist_entry *)he;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
 	/* Clean up symbol view support */
-	c2c_he_cleanup_symbol_support(hist_entry, c2c_he);
+	c2c_he_free_symbol_view_resources(he, c2c_he);
 
 	if (c2c_he->hists) {
 		hists__delete_entries(&c2c_he->hists->hists);
