@@ -2583,75 +2583,48 @@ perf_c2c_browser__new(struct hists *hists)
 }
 
 /*
- * Browse a Shared Data Cache Line Table filtered to cachelines shared by
- * the selected related symbol (child) and its parent symbol. This uses the
- * standard cacheline columns and title, and supports 'd' to open cacheline details.
+ * Browse a Shared Data Cache Line Table. This uses the standard cacheline columns
+ * and title, and supports 'd' to open cacheline details.
  */
-static int perf_c2c__hists_browse(struct hists *hists, struct perf_session *session)
+int perf_c2c__hists_browse(struct hists *hists)
 {
-	struct hist_browser *cl_browser = NULL;
-	struct c2c_symbol_browser *sym_browser = NULL;
-	struct hist_browser *active_browser;
+	struct hist_browser *browser;
 	int key = -1;
-	int ret;
+	int ret = 0;
 	static const char help[] =
-	" d             Display details (cacheline details for selected item)\n"
-	" e/+             Expand/collapse related symbols (Symbol view only)\n"
-	" TAB           Switch between Cacheline/Symbol view\n"
-	" ENTER         Open filtered Shared Data Cache Line Table for selected related symbol\n"
+	" d             Display cacheline details\n"
+	" ENTER         Toggle callchains (if present)\n"
+	" TAB           Switch to Symbol view\n"
 	" q             Quit\n";
 
-	/* Build symbol hists */
-	ret = build_symbol_hists(perf_session__env(session));
-	if (ret) {
-		ui__error("Failed to build symbol view (ret=%d)\n", ret);
-	}
-
-	cl_browser = perf_c2c_browser__new(hists);
-	if (cl_browser == NULL)
+	browser = perf_c2c_browser__new(hists);
+	if (browser == NULL)
 		return -1;
 
-	/* Only create symbol browser if symbol hists were built successfully */
-	if (!ret) {
-		sym_browser = c2c_symbol_browser__new(&c2c.symbol_hists.hists, session);
-		if (sym_browser == NULL) {
-			ui__error("Failed to create symbol browser, continuing with cacheline view only\n");
-		}
-	}
+	/* reset abort key so that it can get Ctrl-C as a key */
+	SLang_reset_tty();
+	SLang_init_tty(0, 0, 0);
 
-	c2c_browser__update_nr_entries(cl_browser);
-	if (sym_browser)
-		c2c_browser__update_nr_entries(&sym_browser->hb);
-
-	active_browser = cl_browser;  // Default to cacheline view
+	c2c_browser__update_nr_entries(browser);
 
 	while (1) {
-		key = hist_browser__run(active_browser, "? - help", true, 0);
+		key = hist_browser__run(browser, "? - help", true, 0);
 
 		switch (key) {
 		case 'q':
+			ret = 1;
 			goto out;
 		case 'd':
-			/* Handle cacheline detail view */
-			if (active_browser == cl_browser && active_browser->he_selection) {
-				/* In cacheline view, directly browse the selected cacheline */
-				perf_c2c__browse_cacheline(active_browser->he_selection);
-			} else if (sym_browser && active_browser == &sym_browser->hb && active_browser->he_selection) {
-				/* In symbol view, delegate to symbol browser handler */
-				c2c_symbol_browser__browse_cacheline_detail(sym_browser, active_browser->he_selection, hists);
-			}
-			break;
-		case 'e':
-		case '+':
-			if (sym_browser && active_browser == &sym_browser->hb)
-				c2c_symbol_browser__handle_expand(sym_browser);
+			perf_c2c__browse_cacheline(browser->he_selection);
 			break;
 		case '\t':
-			if (sym_browser)
-				active_browser = (active_browser == cl_browser) ? &sym_browser->hb : cl_browser;
+			/* TAB key switches to symbol view */
+			ret = perf_c2c__browse_symbol_view(hists);
+			if (ret == 1)
+				goto out;
 			break;
 		case '?':
-			ui_browser__help_window(&active_browser->b, help);
+			ui_browser__help_window(&browser->b, help);
 			break;
 		default:
 			break;
@@ -2659,11 +2632,8 @@ static int perf_c2c__hists_browse(struct hists *hists, struct perf_session *sess
 	}
 
 out:
-	if (cl_browser)
-		hist_browser__delete(cl_browser);
-	if (sym_browser)
-		c2c_symbol_browser__delete(sym_browser);
-	return 0;
+	hist_browser__delete(browser);
+	return ret;
 }
 
 static void perf_c2c_display(struct perf_session *session)
@@ -2671,7 +2641,7 @@ static void perf_c2c_display(struct perf_session *session)
 	if (use_browser == 0)
 		perf_c2c__hists_fprintf(stdout, session);
 	else
-		perf_c2c__hists_browse(&c2c.hists.hists, session);
+		perf_c2c__hists_browse(&c2c.hists.hists);
 }
 #else
 static void perf_c2c_display(struct perf_session *session)

@@ -422,7 +422,6 @@ int64_t rmt_dram_cmp(struct perf_hpp_fmt *fmt,
  * struct c2c_symbol_browser - Symbol browser for C2C analysis
  * @hb: Base histogram browser
  * @hists: Symbol histograms to display
- * @session: Perf session for data access
  *
  * This browser displays symbol-level view of cacheline sharing,
  * allowing users to see which symbols (functions) share cachelines
@@ -431,18 +430,15 @@ int64_t rmt_dram_cmp(struct perf_hpp_fmt *fmt,
 struct c2c_symbol_browser {
 	struct hist_browser	hb;
 	struct hists		*hists;
-	struct perf_session	*session;
 };
 
 /**
  * c2c_symbol_browser__new - Create a new C2C symbol browser
  * @hists: Symbol histograms to display
- * @session: Perf session for accessing symbol information
  *
  * Returns: Pointer to newly created browser, or NULL on error
  */
-struct c2c_symbol_browser *c2c_symbol_browser__new(struct hists *hists,
-						   struct perf_session *session);
+struct c2c_symbol_browser *c2c_symbol_browser__new(struct hists *hists);
 
 /**
  * c2c_symbol_browser__delete - Free a C2C symbol browser
@@ -462,24 +458,23 @@ int c2c_symbol_browser__handle_expand(struct c2c_symbol_browser *browser);
  * c2c_symbol_browser__browse_cacheline_detail - Handle cacheline detail view
  * @browser: Symbol browser instance
  * @he_selection: Selected histogram entry
- * @main_hists: Main cacheline hists
+ * @hists: Main cacheline hists
  *
  * Returns: 0 on success, negative value on error
  */
 int c2c_symbol_browser__browse_cacheline_detail(struct c2c_symbol_browser *browser,
 					       struct hist_entry *he_selection,
-					       struct hists *main_hists);
+					       struct hists *hists);
 
 /**
  * build_symbol_hists - Build symbol-level histograms from cacheline data
- * @env: Perf environment containing symbol tables
  *
  * Creates symbol_hists by aggregating cacheline data by symbol,
  * building the cacheline index, and establishing symbol associations.
  *
  * Returns: 0 on success, negative error code on failure
  */
-int build_symbol_hists(struct perf_env *env);
+int build_symbol_hists(void);
 
 /**
  * build_cacheline_symbol_index - Build index mapping cachelines to symbols
@@ -508,12 +503,28 @@ void cleanup_cacheline_symbol_index(void);
 void populate_symbol_children(struct hist_entry *he);
 
 /**
+ * perf_c2c__hists_browse - Browse C2C histograms with cacheline view
+ * @hists: Histograms to browse
+ *
+ * Returns: 0 on success, 1 if user quit all browsers, negative error code on failure
+ */
+int perf_c2c__hists_browse(struct hists *hists);
+
+/**
  * perf_c2c__browse_cacheline - Display cacheline details browser
  * @he: Histogram entry for the cacheline to browse
  *
  * Returns: 0 on success, negative error code on failure
  */
 int perf_c2c__browse_cacheline(struct hist_entry *he);
+
+/**
+ * perf_c2c__browse_symbol_view - Browse symbol view browser
+ * @hists: Main cacheline histograms
+ *
+ * Returns: 0 on success, 1 if user quit all browsers, negative error code on failure
+ */
+int perf_c2c__browse_symbol_view(struct hists *hists);
 
 /**
  * symbol_name_equal - Compare two symbols by name

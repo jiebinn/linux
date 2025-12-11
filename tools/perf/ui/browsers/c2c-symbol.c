@@ -11,6 +11,7 @@
  */
 
 #include "../../c2c.h"
+#include <unistd.h>
 
 /* Helper macros for common C2C operations */
 #define HITM_COUNT(stats) ((stats)->rmt_hitm + (stats)->lcl_hitm)
@@ -1282,7 +1283,7 @@ uint64_t get_total_cycles_all_symbols(void)
  *
  * Returns: 0 on success, negative error code on failure
  */
-int build_symbol_hists(struct perf_env *env)
+int build_symbol_hists(void)
 {
 	struct rb_node *next;
 	struct hist_entry *he_sym;
@@ -1299,14 +1300,14 @@ int build_symbol_hists(struct perf_env *env)
 	next = rb_first_cached(&c2c.hists.hists.entries);
 
 	/* Initialize symbol hists with sort by iaddr (code address) and symbol */
-	ret = c2c_hists__init(&c2c.symbol_hists, "iaddr,symbol", 2, env);
+	ret = c2c_hists__init(&c2c.symbol_hists, "iaddr,symbol", 2, NULL);
 	if (ret)
 		return ret;
 
 	/* Setup output fields for symbol view - sorted by cycles percentage (descending) */
 	ret = c2c_hists__reinit(&c2c.symbol_hists,
 		"cycles_percent,total_stores,iaddr,symbol,cacheline_symbol",
-		"cycles_percent", env);
+		"cycles_percent", NULL);
 	if (ret)
 		return ret;
 
@@ -1431,12 +1432,11 @@ static int c2c_symbol_browser__title(struct hist_browser *browser,
 /**
  * c2c_symbol_browser__new - Create new symbol browser instance
  */
-struct c2c_symbol_browser *c2c_symbol_browser__new(struct hists *hists,
-						   struct perf_session *session)
+struct c2c_symbol_browser *c2c_symbol_browser__new(struct hists *hists)
 {
 	struct c2c_symbol_browser *browser;
 
-	if (!hists || !session)
+	if (!hists)
 		return NULL;
 
 	browser = zalloc(sizeof(*browser));
@@ -1445,7 +1445,6 @@ struct c2c_symbol_browser *c2c_symbol_browser__new(struct hists *hists,
 
 	/* Store references */
 	browser->hists = hists;
-	browser->session = session;
 
 	/* Initialize base histogram browser */
 	hist_browser__init(&browser->hb, hists);
@@ -1503,7 +1502,7 @@ int c2c_symbol_browser__handle_expand(struct c2c_symbol_browser *browser)
  */
 int c2c_symbol_browser__browse_cacheline_detail(struct c2c_symbol_browser *browser,
 					       struct hist_entry *he_selection,
-					       struct hists *main_hists)
+					       struct hists *hists)
 {
 	struct rb_node *nd;
 	u64 cl_addr = 0;
@@ -1520,7 +1519,7 @@ int c2c_symbol_browser__browse_cacheline_detail(struct c2c_symbol_browser *brows
 		return -1;
 
 	/* Find the cacheline entry in the main hists */
-	nd = rb_first_cached(&main_hists->entries);
+	nd = rb_first_cached(&hists->entries);
 	while (nd) {
 		struct hist_entry *he_cl = rb_entry(nd, struct hist_entry, rb_node);
 
@@ -1536,6 +1535,75 @@ int c2c_symbol_browser__browse_cacheline_detail(struct c2c_symbol_browser *brows
 	}
 
 	return -1; /* Cacheline not found */
+}
+
+/**
+ * perf_c2c__browse_symbol_view - Browse symbol view with TAB key support
+ * @hists: Main cacheline histograms
+ *
+ * Returns: 0 on success, 1 if user quit all browsers, negative error code on failure
+ */
+int perf_c2c__browse_symbol_view(struct hists *hists)
+{
+	struct c2c_symbol_browser *sym_browser = NULL;
+	int key = -1;
+	int ret;
+	static const char help[] =
+	" d             Display details (cacheline details for selected item)\n"
+	" e/+             Expand/collapse related symbols\n"
+	" TAB           Switch back to Cacheline view\n"
+	" ENTER         Open filtered Shared Data Cache Line Table for selected related symbol\n"
+	" q             Quit\n";
+
+	/* Build symbol hists */
+	ret = build_symbol_hists();
+	if (ret) {
+		ui__error("Failed to build symbol view (ret=%d)\n", ret);
+		return ret;
+	}
+
+	/* Create symbol browser */
+	sym_browser = c2c_symbol_browser__new(&c2c.symbol_hists.hists);
+	if (sym_browser == NULL)
+		return -1;
+
+	/* reset abort key so that it can get Ctrl-C as a key */
+	SLang_reset_tty();
+	SLang_init_tty(0, 0, 0);
+
+	ui_browser__update_nr_entries(&sym_browser->hb.b, sym_browser->hb.nr_non_filtered_entries);
+
+	while (1) {
+		key = hist_browser__run(&sym_browser->hb, "? - help", true, 0);
+
+		switch (key) {
+		case 'q':
+			ret = 1;
+			goto out;
+		case 'd':
+			c2c_symbol_browser__browse_cacheline_detail(sym_browser, sym_browser->hb.he_selection, hists);
+			break;
+		case 'e':
+		case '+':
+			c2c_symbol_browser__handle_expand(sym_browser);
+			break;
+		case '\t':
+			/* TAB key switches back to cacheline view */
+			ret = perf_c2c__hists_browse(hists);
+			if (ret == 1)
+				goto out;
+			break;
+		case '?':
+			ui_browser__help_window(&sym_browser->hb.b, help);
+			break;
+		default:
+			break;
+		}
+	}
+
+out:
+	c2c_symbol_browser__delete(sym_browser);
+	return ret;
 }
 
 /**
