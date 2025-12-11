@@ -2582,20 +2582,15 @@ perf_c2c_browser__new(struct hists *hists)
 	return browser;
 }
 
-/*
- * Browse a Shared Data Cache Line Table. This uses the standard cacheline columns
- * and title, and supports 'd' to open cacheline details.
- */
 int perf_c2c__hists_browse(struct hists *hists)
 {
 	struct hist_browser *browser;
 	int key = -1;
-	int ret = 0;
 	static const char help[] =
-	" d             Display cacheline details\n"
-	" ENTER         Toggle callchains (if present)\n"
-	" TAB           Switch to Symbol view\n"
-	" q             Quit\n";
+	" d             Display cacheline details \n"
+	" ENTER         Toggle callchains (if present) \n"
+	" TAB           Switch to Symbol view \n"
+	" q             Quit \n";
 
 	browser = perf_c2c_browser__new(hists);
 	if (browser == NULL)
@@ -2612,16 +2607,12 @@ int perf_c2c__hists_browse(struct hists *hists)
 
 		switch (key) {
 		case 'q':
-			ret = 1;
 			goto out;
 		case 'd':
 			perf_c2c__browse_cacheline(browser->he_selection);
 			break;
 		case '\t':
-			/* TAB key switches to symbol view */
-			ret = perf_c2c__browse_symbol_view(hists);
-			if (ret == 1)
-				goto out;
+			perf_c2c__browse_symbol_view(hists);
 			break;
 		case '?':
 			ui_browser__help_window(&browser->b, help);
@@ -2633,7 +2624,7 @@ int perf_c2c__hists_browse(struct hists *hists)
 
 out:
 	hist_browser__delete(browser);
-	return ret;
+	return 0;
 }
 
 static void perf_c2c_display(struct perf_session *session)

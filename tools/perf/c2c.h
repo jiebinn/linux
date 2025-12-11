@@ -506,7 +506,7 @@ void populate_symbol_children(struct hist_entry *he);
  * perf_c2c__hists_browse - Browse C2C histograms with cacheline view
  * @hists: Histograms to browse
  *
- * Returns: 0 on success, 1 if user quit all browsers, negative error code on failure
+ * Returns: 0 on success, negative error code on failure
  */
 int perf_c2c__hists_browse(struct hists *hists);
 
@@ -522,7 +522,7 @@ int perf_c2c__browse_cacheline(struct hist_entry *he);
  * perf_c2c__browse_symbol_view - Browse symbol view browser
  * @hists: Main cacheline histograms
  *
- * Returns: 0 on success, 1 if user quit all browsers, negative error code on failure
+ * Returns: 0 on success, negative error code on failure
  */
 int perf_c2c__browse_symbol_view(struct hists *hists);
 

@@ -1299,6 +1299,9 @@ int build_symbol_hists(void)
 
 	next = rb_first_cached(&c2c.hists.hists.entries);
 
+	/* Clean up previous symbol hists entries before initializing */
+	hists__delete_entries(&c2c.symbol_hists.hists);
+
 	/* Initialize symbol hists with sort by iaddr (code address) and symbol */
 	ret = c2c_hists__init(&c2c.symbol_hists, "iaddr,symbol", 2, NULL);
 	if (ret)
@@ -1541,7 +1544,7 @@ int c2c_symbol_browser__browse_cacheline_detail(struct c2c_symbol_browser *brows
  * perf_c2c__browse_symbol_view - Browse symbol view with TAB key support
  * @hists: Main cacheline histograms
  *
- * Returns: 0 on success, 1 if user quit all browsers, negative error code on failure
+ * Returns: 0 on success, negative error code on failure
  */
 int perf_c2c__browse_symbol_view(struct hists *hists)
 {
@@ -1551,8 +1554,6 @@ int perf_c2c__browse_symbol_view(struct hists *hists)
 	static const char help[] =
 	" d             Display details (cacheline details for selected item)\n"
 	" e/+             Expand/collapse related symbols\n"
-	" TAB           Switch back to Cacheline view\n"
-	" ENTER         Open filtered Shared Data Cache Line Table for selected related symbol\n"
 	" q             Quit\n";
 
 	/* Build symbol hists */
@@ -1578,7 +1579,6 @@ int perf_c2c__browse_symbol_view(struct hists *hists)
 
 		switch (key) {
 		case 'q':
-			ret = 1;
 			goto out;
 		case 'd':
 			c2c_symbol_browser__browse_cacheline_detail(sym_browser, sym_browser->hb.he_selection, hists);
@@ -1586,12 +1586,6 @@ int perf_c2c__browse_symbol_view(struct hists *hists)
 		case 'e':
 		case '+':
 			c2c_symbol_browser__handle_expand(sym_browser);
-			break;
-		case '\t':
-			/* TAB key switches back to cacheline view */
-			ret = perf_c2c__hists_browse(hists);
-			if (ret == 1)
-				goto out;
 			break;
 		case '?':
 			ui_browser__help_window(&sym_browser->hb.b, help);
@@ -1603,7 +1597,7 @@ int perf_c2c__browse_symbol_view(struct hists *hists)
 
 out:
 	c2c_symbol_browser__delete(sym_browser);
-	return ret;
+	return 0;
 }
 
 /**
