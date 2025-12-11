@@ -11,12 +11,10 @@
  *   Joe Mario <jmario@redhat.com>
  */
 #include <errno.h>
-#include <inttypes.h>
 #include <linux/compiler.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/stringify.h>
-#include <linux/zalloc.h>
 #include <asm/bug.h>
 #include <sys/param.h>
 #include "debug.h"
@@ -25,94 +23,19 @@
 #include <subcmd/pager.h>
 #include <subcmd/parse-options.h>
 #include "map_symbol.h"
-#include "mem-events.h"
-#include "session.h"
-#include "hist.h"
-#include "sort.h"
-#include "tool.h"
-#include "cacheline.h"
 #include "data.h"
 #include "event.h"
 #include "evlist.h"
 #include "evsel.h"
-#include "ui/browsers/hists.h"
-#include "thread.h"
-#include "mem2node.h"
-#include "mem-info.h"
-#include "symbol.h"
+#include "c2c.h"
 #include "ui/ui.h"
 #include "ui/progress.h"
 #include "pmus.h"
 #include "string2.h"
 #include "util/util.h"
 
-struct c2c_hists {
-	struct hists		hists;
-	struct perf_hpp_list	list;
-	struct c2c_stats	stats;
-};
-
-struct compute_stats {
-	struct stats		 lcl_hitm;
-	struct stats		 rmt_hitm;
-	struct stats		 lcl_peer;
-	struct stats		 rmt_peer;
-	struct stats		 load;
-};
-
-struct c2c_hist_entry {
-	struct c2c_hists	*hists;
-	struct c2c_stats	 stats;
-	unsigned long		*cpuset;
-	unsigned long		*nodeset;
-	struct c2c_stats	*node_stats;
-	unsigned int		 cacheline_idx;
-
-	struct compute_stats	 cstats;
-
-	unsigned long		 paddr;
-	unsigned long		 paddr_cnt;
-	bool			 paddr_zero;
-	char			*nodestr;
-
-	/*
-	 * must be at the end,
-	 * because of its callchain dynamic entry
-	 */
-	struct hist_entry	he;
-};
 
 static char const *coalesce_default = "iaddr";
-
-struct perf_c2c {
-	struct perf_tool	tool;
-	struct c2c_hists	hists;
-	struct mem2node		mem2node;
-
-	unsigned long		**nodes;
-	int			 nodes_cnt;
-	int			 cpus_cnt;
-	int			*cpu2node;
-	int			 node_info;
-
-	bool			 show_src;
-	bool			 show_all;
-	bool			 use_stdio;
-	bool			 stats_only;
-	bool			 symbol_full;
-	bool			 stitch_lbr;
-
-	/* Shared cache line stats */
-	struct c2c_stats	shared_clines_stats;
-	int			shared_clines;
-
-	int			 display;
-
-	const char		*coalesce;
-	char			*cl_sort;
-	char			*cl_resort;
-	char			*cl_output;
-};
 
 enum {
 	DISPLAY_LCL_HITM,
@@ -134,7 +57,7 @@ static const struct option c2c_options[] = {
 	OPT_END()
 };
 
-static struct perf_c2c c2c;
+struct perf_c2c c2c;
 
 static void *c2c_he_zalloc(size_t size)
 {
@@ -162,6 +85,9 @@ static void *c2c_he_zalloc(size_t size)
 	init_stats(&c2c_he->cstats.rmt_peer);
 	init_stats(&c2c_he->cstats.load);
 
+	/* Initialize symbol view support */
+	c2c_he_init_total_cycles(c2c_he);
+
 	return &c2c_he->he;
 
 out_free:
@@ -176,6 +102,10 @@ static void c2c_he_free(void *he)
 	struct c2c_hist_entry *c2c_he;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
+
+	/* Clean up symbol view support */
+	c2c_he_free_symbol_view_resources(he, c2c_he);
+
 	if (c2c_he->hists) {
 		hists__delete_entries(&c2c_he->hists->hists);
 		zfree(&c2c_he->hists);
@@ -188,15 +118,10 @@ static void c2c_he_free(void *he)
 	free(c2c_he);
 }
 
-static struct hist_entry_ops c2c_entry_ops = {
+struct hist_entry_ops c2c_entry_ops = {
 	.new	= c2c_he_zalloc,
 	.free	= c2c_he_free,
 };
-
-static int c2c_hists__init(struct c2c_hists *hists,
-			   const char *sort,
-			   int nr_header_lines,
-			   struct perf_env *env);
 
 static struct c2c_hists*
 he__get_c2c_hists(struct hist_entry *he,
@@ -330,6 +255,7 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	c2c_add_stats(&c2c_he->stats, &stats);
+	c2c_he_invalidate_total_cycles_cache(c2c_he);
 	c2c_add_stats(&c2c_hists->stats, &stats);
 
 	c2c_he__set_cpu(c2c_he, sample);
@@ -364,6 +290,7 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 
 		c2c_he = container_of(he, struct c2c_hist_entry, he);
 		c2c_add_stats(&c2c_he->stats, &stats);
+		c2c_he_invalidate_total_cycles_cache(c2c_he);
 		c2c_add_stats(&c2c_hists->stats, &stats);
 		c2c_add_stats(&c2c_he->node_stats[node], &stats);
 
@@ -399,40 +326,10 @@ static const char * const __usage_report[] = {
 
 static const char * const *report_c2c_usage = __usage_report;
 
-#define C2C_HEADER_MAX 2
+struct c2c_dimension dim_symbol;
+struct c2c_dimension dim_srcline;
 
-struct c2c_header {
-	struct {
-		const char *text;
-		int	    span;
-	} line[C2C_HEADER_MAX];
-};
-
-struct c2c_dimension {
-	struct c2c_header	 header;
-	const char		*name;
-	int			 width;
-	struct sort_entry	*se;
-
-	int64_t (*cmp)(struct perf_hpp_fmt *fmt,
-		       struct hist_entry *, struct hist_entry *);
-	int   (*entry)(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-		       struct hist_entry *he);
-	int   (*color)(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-		       struct hist_entry *he);
-};
-
-struct c2c_fmt {
-	struct perf_hpp_fmt	 fmt;
-	struct c2c_dimension	*dim;
-};
-
-#define SYMBOL_WIDTH 30
-
-static struct c2c_dimension dim_symbol;
-static struct c2c_dimension dim_srcline;
-
-static int symbol_width(struct hists *hists, struct sort_entry *se)
+int symbol_width(struct hists *hists, struct sort_entry *se)
 {
 	int width = hists__col_len(hists, se->se_width_idx);
 
@@ -442,9 +339,9 @@ static int symbol_width(struct hists *hists, struct sort_entry *se)
 	return width;
 }
 
-static int c2c_width(struct perf_hpp_fmt *fmt,
-		     struct perf_hpp *hpp __maybe_unused,
-		     struct hists *hists)
+int c2c_width(struct perf_hpp_fmt *fmt,
+	      struct perf_hpp *hpp __maybe_unused,
+	      struct hists *hists)
 {
 	struct c2c_fmt *c2c_fmt;
 	struct c2c_dimension *dim;
@@ -492,12 +389,6 @@ static int c2c_header(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 
 	return scnprintf(hpp->buf, hpp->size, "%*s", width, text);
 }
-
-#define HEX_STR(__s, __v)				\
-({							\
-	scnprintf(__s, sizeof(__s), "0x%" PRIx64, __v);	\
-	__s;						\
-})
 
 static int64_t
 dcacheline_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
@@ -580,6 +471,11 @@ iaddr_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	char buf[20];
 
+	/* Use symbol entry for symbol view */
+	if (he->hists == &c2c.symbol_hists.hists)
+		return iaddr_symbol_entry(fmt, hpp, he);
+
+	/* Default cacheline view */
 	if (he->mem_info)
 		addr = mem_info__iaddr(he->mem_info)->addr;
 
@@ -639,7 +535,7 @@ __f ## _entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,	\
 }
 
 #define STAT_FN_CMP(__f)						\
-static int64_t								\
+int64_t									\
 __f ## _cmp(struct perf_hpp_fmt *fmt __maybe_unused,			\
 	    struct hist_entry *left, struct hist_entry *right)		\
 {									\
@@ -829,12 +725,6 @@ static double percent_costly_snoop(struct c2c_hist_entry *c2c_he)
 	return 100 * p;
 }
 
-#define PERC_STR(__s, __v)				\
-({							\
-	scnprintf(__s, sizeof(__s), "%.2F%%", __v);	\
-	__s;						\
-})
-
 static int
 percent_costly_snoop_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 			   struct hist_entry *he)
@@ -874,7 +764,7 @@ percent_costly_snoop_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	return per_left - per_right;
 }
 
-static struct c2c_stats *he_stats(struct hist_entry *he)
+struct c2c_stats *he_stats(struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
 
@@ -882,20 +772,13 @@ static struct c2c_stats *he_stats(struct hist_entry *he)
 	return &c2c_he->stats;
 }
 
-static struct c2c_stats *total_stats(struct hist_entry *he)
+struct c2c_stats *total_stats(struct hist_entry *he)
 {
 	struct c2c_hists *hists;
 
 	hists = container_of(he->hists, struct c2c_hists, hists);
 	return &hists->stats;
 }
-
-static double percent(u32 st, u32 tot)
-{
-	return tot ? 100. * (double) st / (double) tot : 0;
-}
-
-#define PERCENT(__h, __f) percent(he_stats(__h)->__f, total_stats(__h)->__f)
 
 #define PERCENT_FN(__f)								\
 static double percent_ ## __f(struct c2c_hist_entry *c2c_he)			\
@@ -1150,7 +1033,7 @@ pid_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	return thread__pid(left->thread) - thread__pid(right->thread);
 }
 
-static int64_t
+int64_t
 empty_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	  struct hist_entry *left __maybe_unused,
 	  struct hist_entry *right __maybe_unused)
@@ -1715,9 +1598,10 @@ static struct c2c_dimension dim_tid = {
 	.se		= &sort_thread,
 };
 
-static struct c2c_dimension dim_symbol = {
+struct c2c_dimension dim_symbol = {
 	.name		= "symbol",
 	.se		= &sort_sym,
+	.entry		= symbol_entry,
 };
 
 static struct c2c_dimension dim_dso = {
@@ -1781,7 +1665,8 @@ static struct c2c_dimension dim_cpucnt = {
 	.width		= 8,
 };
 
-static struct c2c_dimension dim_srcline = {
+
+struct c2c_dimension dim_srcline = {
 	.name		= "cl_srcline",
 	.se		= &sort_srcline,
 };
@@ -1862,6 +1747,9 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_mean_lcl_peer,
 	&dim_mean_load,
 	&dim_cpucnt,
+	&dim_cycles_percent,
+	&dim_total_stores,
+	&dim_cacheline_symbol,
 	&dim_srcline,
 	&dim_dcacheline_idx,
 	&dim_dcacheline_num,
@@ -1912,6 +1800,10 @@ static int c2c_se_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		if (dim == &dim_symbol || dim == &dim_srcline)
 			len = symbol_width(he->hists, dim->se);
 	}
+
+	/* Use custom symbol entry only in symbol view to avoid altering cacheline view alignment */
+	if (dim == &dim_symbol && he->hists == &c2c.symbol_hists.hists)
+		return symbol_entry(fmt, hpp, he);
 
 	return dim->se->se_snprintf(he, hpp->buf, hpp->size, len);
 }
@@ -2054,10 +1946,10 @@ static int hpp_list__parse(struct perf_hpp_list *hpp_list,
 	return ret;
 }
 
-static int c2c_hists__init(struct c2c_hists *hists,
-			   const char *sort,
-			   int nr_header_lines,
-			   struct perf_env *env)
+int c2c_hists__init(struct c2c_hists *hists,
+		    const char *sort,
+		    int nr_header_lines,
+		    struct perf_env *env)
 {
 	__hists__init(&hists->hists, &hists->list);
 
@@ -2074,10 +1966,10 @@ static int c2c_hists__init(struct c2c_hists *hists,
 	return hpp_list__parse(&hists->list, /*output=*/NULL, sort, env);
 }
 
-static int c2c_hists__reinit(struct c2c_hists *c2c_hists,
-			     const char *output,
-			     const char *sort,
-			     struct perf_env *env)
+int c2c_hists__reinit(struct c2c_hists *c2c_hists,
+		      const char *output,
+		      const char *sort,
+		      struct perf_env *env)
 {
 	perf_hpp__reset_output_field(&c2c_hists->list);
 	return hpp_list__parse(&c2c_hists->list, output, sort, env);
@@ -2606,7 +2498,7 @@ c2c_cacheline_browser__new(struct hists *hists, struct hist_entry *he)
 	return browser;
 }
 
-static int perf_c2c__browse_cacheline(struct hist_entry *he)
+int perf_c2c__browse_cacheline(struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
 	struct c2c_hists *c2c_hists;
@@ -2690,13 +2582,14 @@ perf_c2c_browser__new(struct hists *hists)
 	return browser;
 }
 
-static int perf_c2c__hists_browse(struct hists *hists)
+int perf_c2c__hists_browse(struct hists *hists)
 {
 	struct hist_browser *browser;
 	int key = -1;
 	static const char help[] =
 	" d             Display cacheline details \n"
 	" ENTER         Toggle callchains (if present) \n"
+	" TAB           Switch to Symbol view \n"
 	" q             Quit \n";
 
 	browser = perf_c2c_browser__new(hists);
@@ -2717,6 +2610,9 @@ static int perf_c2c__hists_browse(struct hists *hists)
 			goto out;
 		case 'd':
 			perf_c2c__browse_cacheline(browser->he_selection);
+			break;
+		case '\t':
+			perf_c2c__browse_symbol_view(hists);
 			break;
 		case '?':
 			ui_browser__help_window(&browser->b, help);
@@ -3210,6 +3106,8 @@ out_mem2node:
 out_session:
 	perf_session__delete(session);
 out:
+	/* Clean up cacheline index on exit */
+	cleanup_cacheline_symbol_index();
 	return err;
 }
 
