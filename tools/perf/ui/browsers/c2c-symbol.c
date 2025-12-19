@@ -77,7 +77,7 @@ cacheline_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 /**
  * iaddr_symbol_entry - Render code address for symbol view with hierarchy indicators
  */
-int
+static int
 iaddr_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		   struct hist_entry *he)
 {
@@ -326,6 +326,16 @@ cycles_percent_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	cycles_right = calculate_symbol_total_cycles(c2c_right);
 
 	return (int64_t)cycles_left - (int64_t)cycles_right;
+}
+
+/**
+ * iaddr_symbol_cmp - Comparison function for instruction address sorting in symbol view
+ */
+static int64_t
+iaddr_symbol_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
+		   struct hist_entry *left, struct hist_entry *right)
+{
+	return sort__iaddr_cmp(left, right);
 }
 
 /**
@@ -783,7 +793,7 @@ void build_cacheline_symbol_index(void)
 
 					/* Check if we already have an entry for this symbol+iaddr combination */
 					while (cur) {
-						if (cur->sym == he_d->ms.sym && cur->iaddr == iaddr_d) {
+						if (symbol_name_equal(cur->sym, he_d->ms.sym) && cur->iaddr == iaddr_d) {
 							/* Aggregate statistics */
 							c2c_add_stats(&cur->stats, &c2c_he_d->stats);
 							c2c_add_cstats(&cur->cstats, &c2c_he_d->cstats);
@@ -1303,13 +1313,13 @@ int build_symbol_hists(void)
 	hists__delete_entries(&c2c.symbol_hists.hists);
 
 	/* Initialize symbol hists with sort by iaddr (code address) and symbol */
-	ret = c2c_hists__init(&c2c.symbol_hists, "iaddr,symbol", 2, NULL);
+	ret = c2c_hists__init(&c2c.symbol_hists, "iaddr_symbol,symbol", 2, NULL);
 	if (ret)
 		return ret;
 
 	/* Setup output fields for symbol view - sorted by cycles percentage (descending) */
 	ret = c2c_hists__reinit(&c2c.symbol_hists,
-		"cycles_percent,total_stores,iaddr,symbol,cacheline_symbol",
+		"cycles_percent,total_stores,iaddr_symbol,symbol,cacheline_symbol",
 		"cycles_percent", NULL);
 	if (ret)
 		return ret;
@@ -1689,6 +1699,14 @@ struct c2c_dimension dim_cacheline_symbol = {
 	.cmp		= empty_cmp,
 	.entry		= cacheline_symbol_entry,
 	.width		= 16,
+};
+
+struct c2c_dimension dim_iaddr_symbol = {
+	.header		= HEADER_LOW("Code address"),
+	.name		= "iaddr_symbol",
+	.cmp		= iaddr_symbol_cmp,
+	.entry		= iaddr_symbol_entry,
+	.width		= 18,
 };
 
 /**

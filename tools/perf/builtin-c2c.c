@@ -471,11 +471,6 @@ iaddr_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	int width = c2c_width(fmt, hpp, he->hists);
 	char buf[20];
 
-	/* Use symbol entry for symbol view */
-	if (he->hists == &c2c.symbol_hists.hists)
-		return iaddr_symbol_entry(fmt, hpp, he);
-
-	/* Default cacheline view */
 	if (he->mem_info)
 		addr = mem_info__iaddr(he->mem_info)->addr;
 
@@ -1702,6 +1697,7 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_offset,
 	&dim_offset_node,
 	&dim_iaddr,
+	&dim_iaddr_symbol,
 	&dim_tot_hitm,
 	&dim_lcl_hitm,
 	&dim_rmt_hitm,
