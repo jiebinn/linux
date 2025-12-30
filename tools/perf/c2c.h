@@ -136,24 +136,6 @@ struct c2c_hists {
 	struct c2c_stats	stats;
 };
 
-/**
- * struct c2c_hist_entry - Extended histogram entry for C2C analysis
- * @hists: Pointer to child histograms (for cacheline entries)
- * @stats: C2C statistics for this entry
- * @cpuset: Bitmap of CPUs that accessed this entry
- * @nodeset: Bitmap of NUMA nodes that accessed this entry
- * @node_stats: Per-node statistics
- * @cacheline_idx: Index of this cacheline in the sorted list
- * @cstats: Computed statistics (latency averages, etc.)
- * @paddr: Physical address
- * @paddr_cnt: Count of physical addresses seen
- * @paddr_zero: Whether physical address is zero
- * @nodestr: String representation of accessing nodes
- * @related_symbols: List of symbols that share this cacheline
- * @total_cycles: Cached total cycles for this entry
- * @total_cycles_valid: Whether the cached total cycles is valid
- * @he: Base histogram entry (must be last due to dynamic callchain)
- */
 struct c2c_hist_entry {
 	struct c2c_hists	*hists;
 	struct c2c_stats	 stats;
@@ -169,18 +151,26 @@ struct c2c_hist_entry {
 	bool			 paddr_zero;
 	char			*nodestr;
 
-	/* Symbol association support */
-	struct list_head	related_symbols;
-
-	/* Cached total cycles for this entry to avoid repeated calculations */
-	uint64_t		 total_cycles;
-	bool			 total_cycles_valid;
-
 	/*
 	 * must be at the end,
 	 * because of its callchain dynamic entry
 	 */
 	struct hist_entry	he;
+};
+
+/**
+ * struct c2c_hist_entry_ext - Extended histogram entry for C2C analysis
+ * @related_symbols: List of symbols that share this cacheline
+ * @c2c_he: Base histogram entry structure (must be last due to dynamic callchain)
+ *
+ * Note: c2c_he must be the last field because hist_entry (inside c2c_he) has
+ * dynamic callchain data that is allocated immediately after it.
+ */
+struct c2c_hist_entry_ext {
+	/* Symbol association support */
+	struct list_head	related_symbols;
+
+	struct c2c_hist_entry c2c_he;
 };
 
 /**
@@ -539,39 +529,6 @@ static inline bool symbol_name_equal(struct symbol *a, struct symbol *b)
 }
 
 /**
- * init_c2c_he_related_symbols - Initialize related_symbols list
- * @c2c_he: C2C histogram entry to initialize
- */
-static inline void init_c2c_he_related_symbols(struct c2c_hist_entry *c2c_he)
-{
-	INIT_LIST_HEAD(&c2c_he->related_symbols);
-}
-
-/**
- * c2c_he_invalidate_total_cycles_cache - Invalidate cached total cycles
- * @c2c_he: C2C histogram entry
- */
-static inline void c2c_he_invalidate_total_cycles_cache(struct c2c_hist_entry *c2c_he)
-{
-	c2c_he->total_cycles_valid = false;
-}
-
-/**
- * calculate_symbol_total_cycles - Calculate total cycles for a single c2c_hist_entry
- * @c2c_he: C2C histogram entry to calculate cycles for
- *
- * Returns: Total cycles for the symbol
- */
-uint64_t calculate_symbol_total_cycles(struct c2c_hist_entry *c2c_he);
-
-/**
- * get_total_cycles_all_symbols - Calculate total cycles for all symbols
- *
- * Returns: Total cycles across all symbols
- */
-uint64_t get_total_cycles_all_symbols(void);
-
-/**
  * c2c_hists__init - Initialize C2C histograms
  * @hists: C2C hists to initialize
  * @sort: Sort string
@@ -602,24 +559,6 @@ int c2c_hists__reinit(struct c2c_hists *hists, const char *output, const char *s
  */
 void free_child_entries(struct hist_entry *parent_he);
 
-/**
- * c2c_he_init_total_cycles - Initialize symbol view related fields in c2c_hist_entry
- * @c2c_he: C2C histogram entry to initialize
- *
- * Initializes fields required for symbol view functionality including
- * related symbols list and cached total cycles.
- */
-void c2c_he_init_total_cycles(struct c2c_hist_entry *c2c_he);
-
-/**
- * c2c_he_free_symbol_view_resources - Clean up symbol view related resources
- * @he: Histogram entry being freed (as void pointer)
- * @c2c_he: C2C histogram entry to clean up
- *
- * Frees resources allocated for symbol view functionality including
- * child entries, related symbols list, and stat accumulation.
- */
-void c2c_he_free_symbol_view_resources(void *he, struct c2c_hist_entry *c2c_he);
 
 /**
  * c2c_entry_ops - Histogram entry operations for C2C

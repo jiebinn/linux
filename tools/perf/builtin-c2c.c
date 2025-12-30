@@ -85,9 +85,6 @@ static void *c2c_he_zalloc(size_t size)
 	init_stats(&c2c_he->cstats.rmt_peer);
 	init_stats(&c2c_he->cstats.load);
 
-	/* Initialize symbol view support */
-	c2c_he_init_total_cycles(c2c_he);
-
 	return &c2c_he->he;
 
 out_free:
@@ -102,9 +99,6 @@ static void c2c_he_free(void *he)
 	struct c2c_hist_entry *c2c_he;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
-
-	/* Clean up symbol view support */
-	c2c_he_free_symbol_view_resources(he, c2c_he);
 
 	if (c2c_he->hists) {
 		hists__delete_entries(&c2c_he->hists->hists);
@@ -255,7 +249,6 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	c2c_add_stats(&c2c_he->stats, &stats);
-	c2c_he_invalidate_total_cycles_cache(c2c_he);
 	c2c_add_stats(&c2c_hists->stats, &stats);
 
 	c2c_he__set_cpu(c2c_he, sample);
@@ -290,7 +283,6 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 
 		c2c_he = container_of(he, struct c2c_hist_entry, he);
 		c2c_add_stats(&c2c_he->stats, &stats);
-		c2c_he_invalidate_total_cycles_cache(c2c_he);
 		c2c_add_stats(&c2c_hists->stats, &stats);
 		c2c_add_stats(&c2c_he->node_stats[node], &stats);
 
