@@ -40,15 +40,15 @@ static void *c2c_he_ext_zalloc(size_t size)
 	/* Initialize extended fields first (they come before c2c_he in the structure) */
 	INIT_LIST_HEAD(&c2c_he_ext->related_symbols);
 
-	c2c_he_ext->c2c_he.cpuset = bitmap_zalloc(c2c.cpus_cnt);
+	c2c_he_ext->c2c_he.cpuset = bitmap_zalloc(c2c_ext.c2c.cpus_cnt);
 	if (!c2c_he_ext->c2c_he.cpuset)
 		goto out_free;
 
-	c2c_he_ext->c2c_he.nodeset = bitmap_zalloc(c2c.nodes_cnt);
+	c2c_he_ext->c2c_he.nodeset = bitmap_zalloc(c2c_ext.c2c.nodes_cnt);
 	if (!c2c_he_ext->c2c_he.nodeset)
 		goto out_free;
 
-	c2c_he_ext->c2c_he.node_stats = zalloc(c2c.nodes_cnt * sizeof(*c2c_he_ext->c2c_he.node_stats));
+	c2c_he_ext->c2c_he.node_stats = zalloc(c2c_ext.c2c.nodes_cnt * sizeof(*c2c_he_ext->c2c_he.node_stats));
 	if (!c2c_he_ext->c2c_he.node_stats)
 		goto out_free;
 
@@ -230,12 +230,7 @@ symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	/* Hide Symbol for cacheline entries */
 	if (he->parent_he && he->parent_he->parent_he)
 		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
-
-	/* Build the symbol string with proper indentation and folding indicator */
-	if (he->parent_he && he->parent_he->parent_he) {
-		/* Cacheline grandchildren: no symbol display */
-		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
-	} else if (he->parent_he) {
+	else if (he->parent_he) {
 		/* Child entries (depth 1) */
 		if (he->has_children) {
 			snprintf(buf, sizeof(buf), "    %c %s",
@@ -386,7 +381,7 @@ cnt_other_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		return scnprintf(hpp->buf, hpp->size, "%-*s", width, out);
 	}
 
-	return scnprintf(hpp->buf, hpp->size, "%*llu", width, other_load);
+	return scnprintf(hpp->buf, hpp->size, "%*" PRIu64, width, other_load);
 }
 
 /**
@@ -578,7 +573,7 @@ static int init_grandchild_hist_entry(struct hist_entry *grand_he,
 	grand_he->parent_he = child_he;
 	grand_he->depth = child_he->depth + 1;
 	grand_he->leaf = true;
-	grand_he->hists = &c2c.symbol_hists.hists;
+	grand_he->hists = &c2c_ext.symbol_hists.hists;
 	grand_he->filtered = false;
 	grand_he->unfolded = false;
 	grand_he->has_children = false;
@@ -592,7 +587,7 @@ static int init_grandchild_hist_entry(struct hist_entry *grand_he,
 	INIT_LIST_HEAD(&grand_he->pairs.node);
 
 	/* Set hierarchy pointers */
-	grand_he->hpp_list = &c2c.symbol_hists.list;
+	grand_he->hpp_list = &c2c_ext.symbol_hists.list;
 
 	/* Copy statistics from symbol access data */
 	memcpy(&grand_c2c->c2c_he.stats, &child_access->stats, sizeof(grand_c2c->c2c_he.stats));
@@ -777,7 +772,7 @@ static struct hist_entry *create_symbol_child_entry(struct hist_entry *parent_he
 	child_he->depth = parent_he->depth + 1;
 	child_he->leaf = false; /* it can have grandchildren (cachelines) */
 	/* In symbol view, all entries should use symbol_hists */
-	child_he->hists = &c2c.symbol_hists.hists;
+	child_he->hists = &c2c_ext.symbol_hists.hists;
 	child_he->filtered = false;  /* Make sure it's not filtered out */
 	child_he->unfolded = false;
 	child_he->has_children = false; /* Will be set to true only if grandchildren are added */
@@ -811,7 +806,7 @@ static struct hist_entry *create_symbol_child_entry(struct hist_entry *parent_he
 	INIT_LIST_HEAD(&child_he->pairs.node);
 
 	/* Initialize hierarchy pointers */
-	child_he->hpp_list = &c2c.symbol_hists.list;
+	child_he->hpp_list = &c2c_ext.symbol_hists.list;
 
 	/* Copy c2c stats - this is what c2c columns use */
 	child_c2c = container_of(child_he, struct c2c_hist_entry_ext, c2c_he.he);
@@ -838,13 +833,13 @@ void build_cacheline_symbol_index(void)
 	int index = 0;
 
 	/* Return early if already built */
-	if (c2c.cacheline_index_built)
+	if (c2c_ext.cacheline_index_built)
 		return;
 
 	/* Free existing index if any */
-	if (c2c.cacheline_index) {
-		for (int i = 0; i < c2c.cacheline_index_size; i++) {
-			struct symbol_access *sa = c2c.cacheline_index[i].symbol_accesses;
+	if (c2c_ext.cacheline_index) {
+		for (int i = 0; i < c2c_ext.cacheline_index_size; i++) {
+			struct symbol_access *sa = c2c_ext.cacheline_index[i].symbol_accesses;
 
 			while (sa) {
 				struct symbol_access *next = sa->next;
@@ -853,17 +848,17 @@ void build_cacheline_symbol_index(void)
 				sa = next;
 			}
 		}
-		free(c2c.cacheline_index);
-		c2c.cacheline_index = NULL;
+		free(c2c_ext.cacheline_index);
+		c2c_ext.cacheline_index = NULL;
 	}
 
 	/* Build index in single pass with dynamic array growth */
-	c2c.cacheline_index_size = 0;
-	c2c.cacheline_index_capacity = 64; /* Start with reasonable size */
+	c2c_ext.cacheline_index_size = 0;
+	c2c_ext.cacheline_index_capacity = 64; /* Start with reasonable size */
 
-	c2c.cacheline_index = malloc(c2c.cacheline_index_capacity * sizeof(struct cacheline_symbol_entry));
-	if (!c2c.cacheline_index) {
-		c2c.cacheline_index_size = 0;
+	c2c_ext.cacheline_index = malloc(c2c_ext.cacheline_index_capacity * sizeof(struct cacheline_symbol_entry));
+	if (!c2c_ext.cacheline_index) {
+		c2c_ext.cacheline_index_size = 0;
 		return;
 	}
 
@@ -872,17 +867,17 @@ void build_cacheline_symbol_index(void)
 		struct hist_entry *he_cl;
 
 		/* Grow array if needed */
-		if (index >= c2c.cacheline_index_capacity) {
+		if (index >= c2c_ext.cacheline_index_capacity) {
 			struct cacheline_symbol_entry *new_index;
 			int cleanup_i;
 
-			c2c.cacheline_index_capacity *= 2;
-			new_index = realloc(c2c.cacheline_index,
-				c2c.cacheline_index_capacity * sizeof(struct cacheline_symbol_entry));
+			c2c_ext.cacheline_index_capacity *= 2;
+			new_index = realloc(c2c_ext.cacheline_index,
+				c2c_ext.cacheline_index_capacity * sizeof(struct cacheline_symbol_entry));
 			if (!new_index) {
 				/* Cleanup on allocation failure */
-				for (cleanup_i = 0; cleanup_i < c2c.cacheline_index_size; cleanup_i++) {
-					struct symbol_access *sa = c2c.cacheline_index[cleanup_i].symbol_accesses;
+				for (cleanup_i = 0; cleanup_i < c2c_ext.cacheline_index_size; cleanup_i++) {
+					struct symbol_access *sa = c2c_ext.cacheline_index[cleanup_i].symbol_accesses;
 
 					while (sa) {
 						struct symbol_access *next = sa->next;
@@ -891,19 +886,19 @@ void build_cacheline_symbol_index(void)
 						sa = next;
 					}
 				}
-				free(c2c.cacheline_index);
-				c2c.cacheline_index = NULL;
-				c2c.cacheline_index_size = 0;
+				free(c2c_ext.cacheline_index);
+				c2c_ext.cacheline_index = NULL;
+				c2c_ext.cacheline_index_size = 0;
 				return;
 			}
-			c2c.cacheline_index = new_index;
+			c2c_ext.cacheline_index = new_index;
 		}
 
 		he_cl = rb_entry(nd_cl, struct hist_entry, rb_node);
 
-		c2c.cacheline_index[index].he_cl = he_cl;
-		c2c.cacheline_index[index].c2c_he_cl = container_of(he_cl, struct c2c_hist_entry, he);
-		c2c.cacheline_index[index].symbol_accesses = NULL;
+		c2c_ext.cacheline_index[index].he_cl = he_cl;
+		c2c_ext.cacheline_index[index].c2c_he_cl = container_of(he_cl, struct c2c_hist_entry, he);
+		c2c_ext.cacheline_index[index].symbol_accesses = NULL;
 
 		/* Build symbol access list for this cacheline with proper aggregation */
 		if (container_of(he_cl, struct c2c_hist_entry, he)->hists &&
@@ -915,7 +910,7 @@ void build_cacheline_symbol_index(void)
 
 				if (he_d->ms.sym && !he_d->filtered) {
 					uint64_t iaddr_d = he_d->mem_info ? mem_info__iaddr(he_d->mem_info)->addr : he_d->ms.sym->start;
-					struct symbol_access *cur = c2c.cacheline_index[index].symbol_accesses;
+					struct symbol_access *cur = c2c_ext.cacheline_index[index].symbol_accesses;
 					bool merged = false;
 
 					/* Check if we already have an entry for this symbol+iaddr combination */
@@ -941,8 +936,8 @@ void build_cacheline_symbol_index(void)
 							sa->maps = he_d->ms.maps;
 							memcpy(&sa->stats, &container_of(he_d, struct c2c_hist_entry, he)->stats, sizeof(sa->stats));
 							memcpy(&sa->cstats, &container_of(he_d, struct c2c_hist_entry, he)->cstats, sizeof(sa->cstats));
-							sa->next = c2c.cacheline_index[index].symbol_accesses;
-							c2c.cacheline_index[index].symbol_accesses = sa;
+							sa->next = c2c_ext.cacheline_index[index].symbol_accesses;
+							c2c_ext.cacheline_index[index].symbol_accesses = sa;
 						}
 					}
 				}
@@ -951,12 +946,12 @@ void build_cacheline_symbol_index(void)
 		}
 
 		index++;
-		c2c.cacheline_index_size = index;  /* Update size as we go */
+		c2c_ext.cacheline_index_size = index;  /* Update size as we go */
 		nd_cl = rb_next(nd_cl);
 	}
 
 	/* Mark as built to prevent redundant calls */
-	c2c.cacheline_index_built = true;
+	c2c_ext.cacheline_index_built = true;
 }
 
 /**
@@ -964,9 +959,9 @@ void build_cacheline_symbol_index(void)
  */
 void cleanup_cacheline_symbol_index(void)
 {
-	if (c2c.cacheline_index) {
-		for (int i = 0; i < c2c.cacheline_index_size; i++) {
-			struct symbol_access *sa = c2c.cacheline_index[i].symbol_accesses;
+	if (c2c_ext.cacheline_index) {
+		for (int i = 0; i < c2c_ext.cacheline_index_size; i++) {
+			struct symbol_access *sa = c2c_ext.cacheline_index[i].symbol_accesses;
 
 			while (sa) {
 				struct symbol_access *next = sa->next;
@@ -975,11 +970,11 @@ void cleanup_cacheline_symbol_index(void)
 				sa = next;
 			}
 		}
-		free(c2c.cacheline_index);
-		c2c.cacheline_index = NULL;
-		c2c.cacheline_index_size = 0;
-		c2c.cacheline_index_capacity = 0;
-		c2c.cacheline_index_built = false;
+		free(c2c_ext.cacheline_index);
+		c2c_ext.cacheline_index = NULL;
+		c2c_ext.cacheline_index_size = 0;
+		c2c_ext.cacheline_index_capacity = 0;
+		c2c_ext.cacheline_index_built = false;
 	}
 }
 
@@ -1004,8 +999,8 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 			   (parent_he->ms.sym ? parent_he->ms.sym->start : 0);
 
 	/* Use the pre-built index instead of traversing all cachelines */
-	for (int i = 0; i < c2c.cacheline_index_size; i++) {
-		struct cacheline_symbol_entry *cl_entry = &c2c.cacheline_index[i];
+	for (int i = 0; i < c2c_ext.cacheline_index_size; i++) {
+		struct cacheline_symbol_entry *cl_entry = &c2c_ext.cacheline_index[i];
 		struct symbol_access *parent_access = NULL, *child_access = NULL;
 
 		/* Check if both parent and child symbols access this cacheline */
@@ -1184,8 +1179,8 @@ static void build_symbol_associations(void)
 	build_cacheline_symbol_index();
 
 	/* Iterate through cached index instead of rb-tree */
-	for (cl_idx = 0; cl_idx < c2c.cacheline_index_size; cl_idx++) {
-		struct cacheline_symbol_entry *cl_entry = &c2c.cacheline_index[cl_idx];
+	for (cl_idx = 0; cl_idx < c2c_ext.cacheline_index_size; cl_idx++) {
+		struct cacheline_symbol_entry *cl_entry = &c2c_ext.cacheline_index[cl_idx];
 		struct symbol_addr_pair {
 			struct symbol *sym;
 			uint64_t iaddr;
@@ -1241,7 +1236,7 @@ static void build_symbol_associations(void)
 		if (symbol_count > 1) {
 			for (i = 0; i < symbol_count; i++) {
 				/* Find symbol entry in symbol_hists */
-				nd_sym = rb_first_cached(&c2c.symbol_hists.hists.entries);
+				nd_sym = rb_first_cached(&c2c_ext.symbol_hists.hists.entries);
 				while (nd_sym) {
 					he_sym = rb_entry(nd_sym, struct hist_entry, rb_node);
 					/* Match parent entry by BOTH symbol and code address */
@@ -1303,7 +1298,7 @@ static void build_symbol_associations(void)
 	}
 
 	/* Phase 2: Aggregate stats for related symbols using cached index */
-	nd_sym = rb_first_cached(&c2c.symbol_hists.hists.entries);
+	nd_sym = rb_first_cached(&c2c_ext.symbol_hists.hists.entries);
 	while (nd_sym) {
 		struct related_symbol *rel_sym;
 
@@ -1318,8 +1313,8 @@ static void build_symbol_associations(void)
 				(he_sym->ms.sym ? he_sym->ms.sym->start : 0);
 
 			/* Use cached index instead of nested rb_next loops */
-			for (cl_idx = 0; cl_idx < c2c.cacheline_index_size; cl_idx++) {
-				struct cacheline_symbol_entry *cl_entry = &c2c.cacheline_index[cl_idx];
+			for (cl_idx = 0; cl_idx < c2c_ext.cacheline_index_size; cl_idx++) {
+				struct cacheline_symbol_entry *cl_entry = &c2c_ext.cacheline_index[cl_idx];
 				struct symbol_access *sa_inner;
 				bool target_found = false;
 
@@ -1348,7 +1343,7 @@ static void build_symbol_associations(void)
 	}
 
 	/* Phase 3: Create child entries for symbols with associations */
-	nd_sym = rb_first_cached(&c2c.symbol_hists.hists.entries);
+	nd_sym = rb_first_cached(&c2c_ext.symbol_hists.hists.entries);
 	while (nd_sym) {
 		he_sym = rb_entry(nd_sym, struct hist_entry, rb_node);
 		if (he_sym->has_children)
@@ -1369,10 +1364,10 @@ static uint64_t get_total_cycles_all_symbols(void)
 	uint64_t total_cycles = 0;
 
 	/* Use cached value if available to avoid O(n) scan per row */
-	if (c2c.symbol_total_cycles_valid)
-		return c2c.symbol_total_cycles;
+	if (c2c_ext.symbol_total_cycles_valid)
+		return c2c_ext.symbol_total_cycles;
 
-	nd = rb_first_cached(&c2c.symbol_hists.hists.entries);
+	nd = rb_first_cached(&c2c_ext.symbol_hists.hists.entries);
 	while (nd) {
 		struct hist_entry *he = rb_entry(nd, struct hist_entry, rb_node);
 		struct c2c_hist_entry_ext *c2c_he = container_of(he, struct c2c_hist_entry_ext, c2c_he.he);
@@ -1390,8 +1385,8 @@ static uint64_t get_total_cycles_all_symbols(void)
 		nd = rb_next(nd);
 	}
 
-	c2c.symbol_total_cycles = total_cycles;
-	c2c.symbol_total_cycles_valid = true;
+	c2c_ext.symbol_total_cycles = total_cycles;
+	c2c_ext.symbol_total_cycles_valid = true;
 	return total_cycles;
 }
 
@@ -1412,21 +1407,21 @@ int build_symbol_hists(void)
 	int ret, i;
 
 	/* Invalidate cached total cycles before (re)building symbol histograms */
-	c2c.symbol_total_cycles_valid = false;
-	c2c.symbol_total_cycles = 0;
+	c2c_ext.symbol_total_cycles_valid = false;
+	c2c_ext.symbol_total_cycles = 0;
 
 	next = rb_first_cached(&c2c.hists.hists.entries);
 
 	/* Clean up previous symbol hists entries before initializing */
-	hists__delete_entries(&c2c.symbol_hists.hists);
+	hists__delete_entries(&c2c_ext.symbol_hists.hists);
 
 	/* Initialize symbol hists with sort by iaddr (code address) and symbol */
-	ret = c2c_hists__init(&c2c.symbol_hists, "iaddr_symbol,symbol", 2, NULL);
+	ret = c2c_hists__init(&c2c_ext.symbol_hists, "iaddr_symbol,symbol", 2, NULL);
 	if (ret)
 		return ret;
 
 	/* Setup output fields for symbol view - sorted by cycles percentage (descending) */
-	ret = c2c_hists__reinit(&c2c.symbol_hists,
+	ret = c2c_hists__reinit(&c2c_ext.symbol_hists,
 		"cycles_percent,total_stores,iaddr_symbol,symbol,cacheline_symbol",
 		"cycles_percent", NULL);
 	if (ret)
@@ -1442,14 +1437,14 @@ int build_symbol_hists(void)
 	/* Build cacheline index (will only build once due to internal flag) */
 	build_cacheline_symbol_index();
 
-	if (c2c.cacheline_index_size == 0) {
+	if (c2c_ext.cacheline_index_size == 0) {
 		ui__error("Cacheline index is empty, cannot build symbol hists\n");
 		return -1;
 	}
 
 	/* Directly create histogram entries from cached symbol_access data */
-	for (i = 0; i < c2c.cacheline_index_size; i++) {
-		struct cacheline_symbol_entry *cl_entry = &c2c.cacheline_index[i];
+	for (i = 0; i < c2c_ext.cacheline_index_size; i++) {
+		struct cacheline_symbol_entry *cl_entry = &c2c_ext.cacheline_index[i];
 		struct symbol_access *sa = cl_entry->symbol_accesses;
 
 		/* Process all symbol accesses for this cacheline */
@@ -1492,7 +1487,7 @@ int build_symbol_hists(void)
 				sample.id = 0;
 
 				/* Add entry to histogram with mem_info for proper address display */
-				he_sym = hists__add_entry_ops(&c2c.symbol_hists.hists,
+				he_sym = hists__add_entry_ops(&c2c_ext.symbol_hists.hists,
 							      &c2c_symbol_entry_ops,
 							      &al, NULL, NULL, mi_display,
 							      NULL, &sample, true);
@@ -1507,10 +1502,10 @@ int build_symbol_hists(void)
 					/* Accumulate stats from cached symbol_access across cachelines */
 					c2c_add_stats(&c2c_he_sym->c2c_he.stats, &sa->stats);
 					c2c_add_cstats(&c2c_he_sym->c2c_he.cstats, &sa->cstats);
-					c2c_add_stats(&c2c.symbol_hists.stats, &sa->stats);
+					c2c_add_stats(&c2c_ext.symbol_hists.stats, &sa->stats);
 
-					hists__inc_nr_samples(&c2c.symbol_hists.hists, he_sym->filtered);
-					he_sym->hpp_list = &c2c.symbol_hists.list;
+					hists__inc_nr_samples(&c2c_ext.symbol_hists.hists, he_sym->filtered);
+					he_sym->hpp_list = &c2c_ext.symbol_hists.list;
 				}
 			}
 			sa = sa->next;
@@ -1518,15 +1513,15 @@ int build_symbol_hists(void)
 	}
 
 	/* Resort symbol hists */
-	hists__collapse_resort(&c2c.symbol_hists.hists, NULL);
-	hists__output_resort(&c2c.symbol_hists.hists, NULL);
+	hists__collapse_resort(&c2c_ext.symbol_hists.hists, NULL);
+	hists__output_resort(&c2c_ext.symbol_hists.hists, NULL);
 
 	/* Enable hierarchy support for symbol view to allow multi-level display */
-	c2c.symbol_hists.hists.symbol_filter_str = NULL;
-	c2c.symbol_hists.hists.socket_filter = -1;
+	c2c_ext.symbol_hists.hists.symbol_filter_str = NULL;
+	c2c_ext.symbol_hists.hists.socket_filter = -1;
 
 	/* Initialize the hist browser fields needed for hierarchy */
-	c2c.symbol_hists.hists.nr_hpp_node = 0;
+	c2c_ext.symbol_hists.hists.nr_hpp_node = 0;
 
 	/* Build symbol associations after hists are complete */
 	build_symbol_associations();
@@ -1682,7 +1677,7 @@ int perf_c2c__browse_symbol_view(struct hists *hists)
 	}
 
 	/* Create symbol browser */
-	sym_browser = c2c_symbol_browser__new(&c2c.symbol_hists.hists);
+	sym_browser = c2c_symbol_browser__new(&c2c_ext.symbol_hists.hists);
 	if (sym_browser == NULL)
 		return -1;
 
@@ -1761,9 +1756,6 @@ void free_child_entries(struct hist_entry *parent_he)
 				free(rel_sym);
 			}
 		}
-
-		if (child_he->parent_he && symbol_conf.cumulate_callchain && child_he->stat_acc)
-			zfree(&child_he->stat_acc);
 
 		zfree(&child_c2c_he->c2c_he.cpuset);
 		zfree(&child_c2c_he->c2c_he.nodeset);

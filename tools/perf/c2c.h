@@ -225,7 +225,6 @@ struct cacheline_symbol_entry {
  * struct perf_c2c - Main C2C analysis context
  * @tool: Base perf tool structure
  * @hists: Main cacheline histograms
- * @symbol_hists: Symbol-grouped histograms
  * @mem2node: Memory to node mapping
  * @nodes: Array of CPU bitmaps per node
  * @nodes_cnt: Number of NUMA nodes
@@ -241,21 +240,14 @@ struct cacheline_symbol_entry {
  * @shared_clines_stats: Statistics for shared cachelines
  * @shared_clines: Count of shared cachelines
  * @display: Current display mode
- * @symbol_total_cycles: Cached total cycles across all symbols
- * @symbol_total_cycles_valid: Whether symbol_total_cycles is valid
  * @coalesce: Coalesce settings
  * @cl_sort: Cacheline sort string
  * @cl_resort: Cacheline resort string
  * @cl_output: Cacheline output columns
- * @cacheline_index: Index of cachelines to symbols
- * @cacheline_index_size: Number of entries in cacheline_index
- * @cacheline_index_capacity: Capacity of cacheline_index array
- * @cacheline_index_built: Whether the index has been built
  */
 struct perf_c2c {
 	struct perf_tool	tool;
 	struct c2c_hists	hists;
-	struct c2c_hists	symbol_hists;
 	struct mem2node		mem2node;
 
 	unsigned long		**nodes;
@@ -277,24 +269,47 @@ struct perf_c2c {
 
 	int			 display;
 
-	/* Cached total cycles across all symbols for percent column */
-	uint64_t		symbol_total_cycles;
-	bool			symbol_total_cycles_valid;
-
 	const char		*coalesce;
 	char			*cl_sort;
 	char			*cl_resort;
 	char			*cl_output;
+};
+
+/**
+ * struct perf_c2c_ext - Extended C2C analysis context for symbol view
+ * @c2c: Base C2C analysis context
+ * @symbol_hists: Symbol-grouped histograms for symbol view
+ * @symbol_total_cycles: Cached total cycles across all symbols for percent column
+ * @symbol_total_cycles_valid: Whether symbol_total_cycles is valid
+ * @cacheline_index: Index of cachelines to symbols for performance optimization
+ * @cacheline_index_size: Number of entries in cacheline_index
+ * @cacheline_index_capacity: Capacity of cacheline_index array
+ * @cacheline_index_built: Whether the index has been built
+ *
+ * This extended structure is used only in tools/perf/ui/browsers/c2c-symbol.c
+ * for symbol view functionality, while the base perf_c2c is used in
+ * tools/perf/builtin-c2c.c for cacheline view functionality.
+ */
+struct perf_c2c_ext {
+	struct perf_c2c		c2c;
+
+	/* Symbol view histograms */
+	struct c2c_hists	symbol_hists;
+
+	/* Cached total cycles across all symbols for percent column */
+	uint64_t		symbol_total_cycles;
+	bool			symbol_total_cycles_valid;
 
 	/* Cacheline-to-symbols index for performance optimization */
 	struct cacheline_symbol_entry *cacheline_index;
 	int			cacheline_index_size;
 	int			cacheline_index_capacity;
-	bool			cacheline_index_built;
+	bool		cacheline_index_built;
 };
 
 /* Global C2C context - defined in builtin-c2c.c */
 extern struct perf_c2c c2c;
+extern struct perf_c2c_ext c2c_ext;
 
 /* Dimension declarations - defined in builtin-c2c.c */
 extern struct c2c_dimension dim_symbol;

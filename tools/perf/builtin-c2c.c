@@ -58,6 +58,7 @@ static const struct option c2c_options[] = {
 };
 
 struct perf_c2c c2c;
+struct perf_c2c_ext c2c_ext;
 
 static void *c2c_he_zalloc(size_t size)
 {
@@ -99,7 +100,6 @@ static void c2c_he_free(void *he)
 	struct c2c_hist_entry *c2c_he;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
-
 	if (c2c_he->hists) {
 		hists__delete_entries(&c2c_he->hists->hists);
 		zfree(&c2c_he->hists);
@@ -1790,7 +1790,7 @@ static int c2c_se_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	}
 
 	/* Use custom symbol entry only in symbol view to avoid altering cacheline view alignment */
-	if (dim == &dim_symbol && he->hists == &c2c.symbol_hists.hists)
+	if (dim == &dim_symbol && he->hists == &c2c_ext.symbol_hists.hists)
 		return symbol_entry(fmt, hpp, he);
 
 	return dim->se->se_snprintf(he, hpp->buf, hpp->size, len);
