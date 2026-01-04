@@ -580,14 +580,4 @@ void free_child_entries(struct hist_entry *parent_he);
  */
 extern struct hist_entry_ops c2c_entry_ops;
 
-/**
- * Symbol view dimensions - moved to c2c-symbol.c since they are
- * specifically used in the symbol view browser
- */
-extern struct c2c_dimension dim_cycles_percent;
-extern struct c2c_dimension dim_total_stores;
-extern struct c2c_dimension dim_cacheline_symbol;
-extern struct c2c_dimension dim_iaddr_symbol;
-extern struct c2c_dimension dim_symbol_view;
-
 #endif /* _PERF_BUILTIN_C2C_H_ */

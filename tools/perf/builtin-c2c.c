@@ -1686,7 +1686,6 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_offset,
 	&dim_offset_node,
 	&dim_iaddr,
-	&dim_iaddr_symbol,
 	&dim_tot_hitm,
 	&dim_lcl_hitm,
 	&dim_rmt_hitm,
@@ -1732,14 +1731,10 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_mean_lcl_peer,
 	&dim_mean_load,
 	&dim_cpucnt,
-	&dim_cycles_percent,
-	&dim_total_stores,
-	&dim_cacheline_symbol,
 	&dim_srcline,
 	&dim_dcacheline_idx,
 	&dim_dcacheline_num,
 	&dim_dcacheline_num_empty,
-	&dim_symbol_view,
 	NULL,
 };
 

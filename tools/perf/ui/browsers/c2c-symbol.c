@@ -18,6 +18,11 @@
 
 /* Forward declarations for functions used before their definitions */
 static uint64_t get_total_cycles_all_symbols(void);
+static int c2c_symbol_hists__init(struct c2c_hists *hists, const char *sort,
+				 int nr_header_lines, struct perf_env *env);
+static int c2c_symbol_hists__reinit(struct c2c_hists *c2c_hists,
+				   const char *output, const char *sort,
+				   struct perf_env *env);
 
 /**
  * c2c_he_ext_zalloc - Allocate extended histogram entry for symbol view
@@ -1407,12 +1412,12 @@ int build_symbol_hists(void)
 	hists__delete_entries(&c2c_ext.symbol_hists.hists);
 
 	/* Initialize symbol hists with sort by iaddr (code address) and symbol_view */
-	ret = c2c_hists__init(&c2c_ext.symbol_hists, "iaddr_symbol,symbol_view", 2, NULL);
+	ret = c2c_symbol_hists__init(&c2c_ext.symbol_hists, "iaddr_symbol,symbol_view", 2, NULL);
 	if (ret)
 		return ret;
 
 	/* Setup output fields for symbol view - sorted by cycles percentage (descending) */
-	ret = c2c_hists__reinit(&c2c_ext.symbol_hists,
+	ret = c2c_symbol_hists__reinit(&c2c_ext.symbol_hists,
 		"cycles_percent,total_stores,iaddr_symbol,symbol_view,cacheline_symbol",
 		"cycles_percent", NULL);
 	if (ret)
@@ -1763,11 +1768,81 @@ void free_child_entries(struct hist_entry *parent_he)
 	}
 }
 
-/*
- * Symbol view dimensions - moved from builtin-c2c.c since these are
- * specifically used in the symbol view browser
- */
+/* Helper functions for dimension management */
 
+/**
+ * fmt_free - Free a format wrapper
+ * @fmt: Format to free
+ */
+static void fmt_free(struct perf_hpp_fmt *fmt)
+{
+	struct c2c_fmt *c2c_fmt;
+
+	c2c_fmt = container_of(fmt, struct c2c_fmt, fmt);
+	free(c2c_fmt);
+}
+
+/**
+ * fmt_equal - Check if two formats are equal
+ * @a: First format
+ * @b: Second format
+ *
+ * Returns: true if formats refer to the same dimension
+ */
+static bool fmt_equal(struct perf_hpp_fmt *a, struct perf_hpp_fmt *b)
+{
+	struct c2c_fmt *c2c_a = container_of(a, struct c2c_fmt, fmt);
+	struct c2c_fmt *c2c_b = container_of(b, struct c2c_fmt, fmt);
+
+	return c2c_a->dim == c2c_b->dim;
+}
+
+/**
+ * c2c_header - Render column header for C2C dimensions
+ * @fmt: Format wrapper
+ * @hpp: HPP buffer
+ * @hists: Histogram context
+ * @line: Header line number
+ * @span: Output span value
+ *
+ * Returns: Number of characters written
+ */
+static int c2c_header(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		      struct hists *hists, int line, int *span)
+{
+	struct perf_hpp_list *hpp_list = hists->hpp_list;
+	struct c2c_fmt *c2c_fmt;
+	struct c2c_dimension *dim;
+	const char *text = NULL;
+	int width = c2c_width(fmt, hpp, hists);
+
+	c2c_fmt = container_of(fmt, struct c2c_fmt, fmt);
+	dim = c2c_fmt->dim;
+
+	if (dim->header.line[line].text)
+		text = dim->header.line[line].text;
+
+	if (span) {
+		if (dim->header.line[line].span)
+			*span = dim->header.line[line].span;
+		else
+			*span = width;
+	}
+
+	if (text == NULL)
+		text = "";
+
+	/* Support centered header display */
+	if (hpp_list && hpp_list->nr_header_lines > 0 &&
+	    line >= hpp_list->nr_header_lines)
+		return 0;
+
+	return scnprintf(hpp->buf, hpp->size, "%*s", width, text);
+}
+
+/*
+ * Symbol view dimensions
+ */
 struct c2c_dimension dim_cycles_percent = {
 	.header		= HEADER_BOTH("Cycles", "Percent"),
 	.name		= "cycles_percent",
@@ -1805,4 +1880,232 @@ struct c2c_dimension dim_symbol_view = {
 	.entry		= symbol_view_entry,
 	.width		= SYMBOL_WIDTH,
 };
+
+/*
+ * Symbol view dimensions - dimensions used specifically in the symbol view browser
+ */
+static struct c2c_dimension *symbol_view_dimensions[] = {
+	&dim_iaddr_symbol,
+	&dim_cycles_percent,
+	&dim_total_stores,
+	&dim_cacheline_symbol,
+	&dim_symbol_view,
+	NULL,
+};
+
+/**
+ * get_symbol_dimension - Find a dimension by name in symbol view dimensions
+ * @name: Name of the dimension to find
+ *
+ * Returns: Pointer to the dimension if found, NULL otherwise
+ */
+static struct c2c_dimension *get_symbol_dimension(const char *name)
+{
+	unsigned int i;
+
+	for (i = 0; symbol_view_dimensions[i]; i++) {
+		struct c2c_dimension *dim = symbol_view_dimensions[i];
+
+		if (!strcmp(dim->name, name))
+			return dim;
+	}
+
+	return NULL;
+}
+
+/**
+ * get_symbol_format - Create a format wrapper for a symbol view dimension
+ * @name: Name of the dimension
+ *
+ * Returns: Pointer to the format if found/created, NULL on error
+ */
+static struct c2c_fmt *get_symbol_format(const char *name)
+{
+	struct c2c_dimension *dim = get_symbol_dimension(name);
+	struct c2c_fmt *c2c_fmt;
+	struct perf_hpp_fmt *fmt;
+
+	if (!dim)
+		return NULL;
+
+	c2c_fmt = zalloc(sizeof(*c2c_fmt));
+	if (!c2c_fmt)
+		return NULL;
+
+	fmt = &c2c_fmt->fmt;
+
+	c2c_fmt->dim = dim;
+	INIT_LIST_HEAD(&fmt->list);
+	INIT_LIST_HEAD(&fmt->sort_list);
+
+	fmt->cmp	= dim->cmp;
+	fmt->sort	= dim->cmp;
+	fmt->color	= dim->color;
+	fmt->entry	= dim->entry;
+	fmt->header	= c2c_header;
+	fmt->width	= c2c_width;
+	fmt->collapse	= dim->cmp;
+	fmt->equal	= fmt_equal;
+	fmt->free	= fmt_free;
+
+	return c2c_fmt;
+}
+
+/**
+ * c2c_symbol_hists__init_output - Initialize output field for symbol view
+ * @hpp_list: HPP list to add field to
+ * @name: Name of the field
+ * @env: Perf environment (unused)
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int c2c_symbol_hists__init_output(struct perf_hpp_list *hpp_list, char *name,
+					struct perf_env *env __maybe_unused)
+{
+	struct c2c_fmt *c2c_fmt = get_symbol_format(name);
+	int level = 0;
+
+	if (!c2c_fmt) {
+		reset_dimensions();
+		return output_field_add(hpp_list, name, &level);
+	}
+
+	perf_hpp_list__column_register(hpp_list, &c2c_fmt->fmt);
+	return 0;
+}
+
+/**
+ * c2c_symbol_hists__init_sort - Initialize sort field for symbol view
+ * @hpp_list: HPP list to add sort field to
+ * @name: Name of the sort field
+ * @env: Perf environment
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int c2c_symbol_hists__init_sort(struct perf_hpp_list *hpp_list, char *name,
+				      struct perf_env *env)
+{
+	struct c2c_fmt *c2c_fmt = get_symbol_format(name);
+
+	if (!c2c_fmt) {
+		reset_dimensions();
+		return sort_dimension__add(hpp_list, name, /*evlist=*/NULL, env, /*level=*/0);
+	}
+
+	/* Note: symbol view doesn't have dim_dso, so we don't need to check for it */
+
+	perf_hpp_list__register_sort_field(hpp_list, &c2c_fmt->fmt);
+	return 0;
+}
+
+/**
+ * symbol_hpp_list__parse - Parse output and sort strings for symbol view
+ * @hpp_list: HPP list to configure
+ * @output: Output fields string
+ * @sort: Sort fields string
+ * @env: Perf environment
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int symbol_hpp_list__parse(struct perf_hpp_list *hpp_list,
+				  const char *output_,
+				  const char *sort_,
+				  struct perf_env *env)
+{
+	char *output = output_ ? strdup(output_) : NULL;
+	char *sort   = sort_   ? strdup(sort_) : NULL;
+	int ret;
+
+#define PARSE_LIST(_list, _fn)							\
+	do {									\
+		char *tmp, *tok;						\
+		ret = 0;							\
+										\
+		if (!_list)							\
+			break;							\
+										\
+		tmp = strdup(_list);						\
+		if (!tmp) {							\
+			ret = -ENOMEM;						\
+			break;							\
+		}								\
+										\
+		for (tok = strtok(tmp, ","); tok; tok = strtok(NULL, ",")) {	\
+			ret = _fn(hpp_list, tok, env);				\
+			if (ret)						\
+				break;						\
+		}								\
+										\
+		free(tmp);							\
+	} while (0)
+
+	PARSE_LIST(output, c2c_symbol_hists__init_output);
+	PARSE_LIST(sort,   c2c_symbol_hists__init_sort);
+
+	/* copy sort keys to output fields */
+	perf_hpp__setup_output_field(hpp_list);
+
+	/*
+	 * We don't need other sorting keys other than those
+	 * we already specified. It also really slows down
+	 * the processing a lot with big number of output
+	 * fields, so switching this off for c2c.
+	 */
+
+#if 0
+	/* and then copy output fields to sort keys */
+	perf_hpp__append_sort_keys(&hists->list);
+#endif
+
+	free(output);
+	free(sort);
+	return ret;
+}
+
+/**
+ * c2c_symbol_hists__init - Initialize symbol view histograms
+ * @hists: C2C hists to initialize
+ * @sort: Sort string
+ * @nr_header_lines: Number of header lines
+ * @env: Perf environment
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int c2c_symbol_hists__init(struct c2c_hists *hists,
+				 const char *sort,
+				 int nr_header_lines,
+				 struct perf_env *env)
+{
+	__hists__init(&hists->hists, &hists->list);
+
+	/*
+	 * Initialize only with sort fields, we need to resort
+	 * later anyway, and that's where we add output fields
+	 * as well.
+	 */
+	perf_hpp_list__init(&hists->list);
+
+	/* Overload number of header lines.*/
+	hists->list.nr_header_lines = nr_header_lines;
+
+	return symbol_hpp_list__parse(&hists->list, /*output=*/NULL, sort, env);
+}
+
+/**
+ * c2c_symbol_hists__reinit - Reinitialize symbol view histograms with new output/sort
+ * @c2c_hists: C2C hists to reinitialize
+ * @output: Output columns string
+ * @sort: Sort string
+ * @env: Perf environment
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int c2c_symbol_hists__reinit(struct c2c_hists *c2c_hists,
+				   const char *output,
+				   const char *sort,
+				   struct perf_env *env)
+{
+	perf_hpp__reset_output_field(&c2c_hists->list);
+	return symbol_hpp_list__parse(&c2c_hists->list, output, sort, env);
+}
 
