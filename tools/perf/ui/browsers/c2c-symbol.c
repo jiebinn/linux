@@ -45,15 +45,15 @@ static void *c2c_he_ext_zalloc(size_t size)
 	/* Initialize extended fields first (they come before c2c_he in the structure) */
 	INIT_LIST_HEAD(&c2c_he_ext->related_symbols);
 
-	c2c_he_ext->c2c_he.cpuset = bitmap_zalloc(c2c_ext.c2c.cpus_cnt);
+	c2c_he_ext->c2c_he.cpuset = bitmap_zalloc(c2c.cpus_cnt);
 	if (!c2c_he_ext->c2c_he.cpuset)
 		goto out_free;
 
-	c2c_he_ext->c2c_he.nodeset = bitmap_zalloc(c2c_ext.c2c.nodes_cnt);
+	c2c_he_ext->c2c_he.nodeset = bitmap_zalloc(c2c.nodes_cnt);
 	if (!c2c_he_ext->c2c_he.nodeset)
 		goto out_free;
 
-	c2c_he_ext->c2c_he.node_stats = zalloc(c2c_ext.c2c.nodes_cnt * sizeof(*c2c_he_ext->c2c_he.node_stats));
+	c2c_he_ext->c2c_he.node_stats = zalloc(c2c.nodes_cnt * sizeof(*c2c_he_ext->c2c_he.node_stats));
 	if (!c2c_he_ext->c2c_he.node_stats)
 		goto out_free;
 
