@@ -544,28 +544,6 @@ static inline bool symbol_name_equal(struct symbol *a, struct symbol *b)
 }
 
 /**
- * c2c_hists__init - Initialize C2C histograms
- * @hists: C2C hists to initialize
- * @sort: Sort string
- * @nr_header_lines: Number of header lines
- * @env: Perf environment
- *
- * Returns: 0 on success, negative error code on failure
- */
-int c2c_hists__init(struct c2c_hists *hists, const char *sort, int nr_header_lines, struct perf_env *env);
-
-/**
- * c2c_hists__reinit - Reinitialize C2C histograms with new output/sort
- * @hists: C2C hists to reinitialize
- * @output: Output columns string
- * @sort: Sort string
- * @env: Perf environment
- *
- * Returns: 0 on success, negative error code on failure
- */
-int c2c_hists__reinit(struct c2c_hists *hists, const char *output, const char *sort, struct perf_env *env);
-
-/**
  * free_child_entries - Free child entries of a histogram entry
  * @parent_he: Parent histogram entry whose children to free
  *

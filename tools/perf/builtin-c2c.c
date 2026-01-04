@@ -117,6 +117,11 @@ struct hist_entry_ops c2c_entry_ops = {
 	.free	= c2c_he_free,
 };
 
+static int c2c_hists__init(struct c2c_hists *hists,
+			   const char *sort,
+			   int nr_header_lines,
+			   struct perf_env *env);
+
 static struct c2c_hists*
 he__get_c2c_hists(struct hist_entry *he,
 		  const char *sort,
@@ -1923,10 +1928,10 @@ static int hpp_list__parse(struct perf_hpp_list *hpp_list,
 	return ret;
 }
 
-int c2c_hists__init(struct c2c_hists *hists,
-		    const char *sort,
-		    int nr_header_lines,
-		    struct perf_env *env)
+static int c2c_hists__init(struct c2c_hists *hists,
+			   const char *sort,
+			   int nr_header_lines,
+			   struct perf_env *env)
 {
 	__hists__init(&hists->hists, &hists->list);
 
@@ -1943,10 +1948,10 @@ int c2c_hists__init(struct c2c_hists *hists,
 	return hpp_list__parse(&hists->list, /*output=*/NULL, sort, env);
 }
 
-int c2c_hists__reinit(struct c2c_hists *c2c_hists,
-		      const char *output,
-		      const char *sort,
-		      struct perf_env *env)
+static int c2c_hists__reinit(struct c2c_hists *c2c_hists,
+			     const char *output,
+			     const char *sort,
+			     struct perf_env *env)
 {
 	perf_hpp__reset_output_field(&c2c_hists->list);
 	return hpp_list__parse(&c2c_hists->list, output, sort, env);

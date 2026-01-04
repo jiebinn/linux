@@ -664,8 +664,6 @@ static struct c2c_hist_entry_ext *validate_and_prepare_entries(struct hist_entry
 		return NULL;
 
 	c2c_he = container_of(he, struct c2c_hist_entry_ext, c2c_he.he);
-	if (!c2c_he)
-		return NULL;
 
 	/* Ensure related_symbols list is valid */
 	if (list_empty(&c2c_he->related_symbols)) {
