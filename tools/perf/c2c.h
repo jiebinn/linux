@@ -298,25 +298,6 @@ struct perf_c2c_ext {
 extern struct perf_c2c c2c;
 extern struct perf_c2c_ext c2c_ext;
 
-/**
- * symbol_width - Calculate width for symbol column
- * @hists: Histogram context
- * @se: Sort entry for symbol
- *
- * Returns: Column width respecting SYMBOL_WIDTH limit
- */
-int symbol_width(struct hists *hists, struct sort_entry *se);
-
-/**
- * c2c_width - Calculate width for a C2C column
- * @fmt: HPP format
- * @hpp: HPP context
- * @hists: Histogram context
- *
- * Returns: Column width based on dimension configuration
- */
-int c2c_width(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp, struct hists *hists);
-
 /* Entry functions for symbol view - defined in c2c-symbol.c */
 int total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		       struct hist_entry *he);

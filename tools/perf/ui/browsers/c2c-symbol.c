@@ -22,6 +22,7 @@
 })
 
 /* Forward declarations for functions used before their definitions */
+static int c2c_width(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp, struct hists *hists);
 static uint64_t get_total_cycles_all_symbols(void);
 static int c2c_symbol_hists__init(struct c2c_hists *hists, const char *sort,
 				 int nr_header_lines, struct perf_env *env);
@@ -1771,7 +1772,26 @@ void free_child_entries(struct hist_entry *parent_he)
 	}
 }
 
-/* Helper functions for dimension management */
+/**
+ * c2c_width - Calculate width for a C2C column in symbol view
+ * @fmt: HPP format
+ * @hpp: HPP context
+ * @hists: Histogram context
+ *
+ * Returns: Column width based on dimension configuration
+ */
+static int c2c_width(struct perf_hpp_fmt *fmt,
+	      		struct perf_hpp *hpp __maybe_unused,
+	      		struct hists *hists __maybe_unused)
+{
+	struct c2c_fmt *c2c_fmt;
+	struct c2c_dimension *dim;
+
+	c2c_fmt = container_of(fmt, struct c2c_fmt, fmt);
+	dim = c2c_fmt->dim;
+
+	return dim->width;
+}
 
 /**
  * fmt_free - Free a format wrapper

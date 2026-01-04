@@ -326,7 +326,7 @@ static const char * const *report_c2c_usage = __usage_report;
 static struct c2c_dimension dim_symbol;
 static struct c2c_dimension dim_srcline;
 
-int symbol_width(struct hists *hists, struct sort_entry *se)
+static int symbol_width(struct hists *hists, struct sort_entry *se)
 {
 	int width = hists__col_len(hists, se->se_width_idx);
 
@@ -336,9 +336,9 @@ int symbol_width(struct hists *hists, struct sort_entry *se)
 	return width;
 }
 
-int c2c_width(struct perf_hpp_fmt *fmt,
-	      struct perf_hpp *hpp __maybe_unused,
-	      struct hists *hists)
+static int c2c_width(struct perf_hpp_fmt *fmt,
+		     struct perf_hpp *hpp __maybe_unused,
+		     struct hists *hists)
 {
 	struct c2c_fmt *c2c_fmt;
 	struct c2c_dimension *dim;
@@ -784,7 +784,7 @@ static struct c2c_stats *total_stats(struct hist_entry *he)
 	return &hists->stats;
 }
 
-static inline double percent(u32 st, u32 tot)
+static double percent(u32 st, u32 tot)
 {
 	return tot ? 100. * (double) st / (double) tot : 0;
 }
