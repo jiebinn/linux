@@ -2,32 +2,6 @@
 #ifndef _PERF_C2C_H_
 #define _PERF_C2C_H_ 1
 
-#include <linux/list.h>
-#include <linux/bitmap.h>
-#include <linux/rbtree.h>
-#include <linux/zalloc.h>
-#include <stdbool.h>
-#include <stdlib.h>
-#include <string.h>
-#include <inttypes.h>
-
-#include "addr_location.h"
-#include "ui/browsers/hists.h"
-#include "util/mem-events.h"
-#include "util/mem2node.h"
-#include "util/hist.h"
-#include "util/symbol.h"
-#include "util/tool.h"
-#include "util/session.h"
-#include "util/env.h"
-#include "util/map.h"
-#include "util/maps.h"
-#include "util/sort.h"
-#include "util/mem-info.h"
-#include "util/cacheline.h"
-#include "util/debug.h"
-#include "util/thread.h"
-
 /* Constants */
 #define SYMBOL_WIDTH 30
 #define C2C_HEADER_MAX 2
@@ -299,39 +273,6 @@ extern struct perf_c2c c2c;
 extern struct perf_c2c_ext c2c_ext;
 
 
-/* STAT_FN generated comparison functions */
-int64_t rmt_hitm_cmp(struct perf_hpp_fmt *fmt,
-		     struct hist_entry *left, struct hist_entry *right);
-int64_t lcl_hitm_cmp(struct perf_hpp_fmt *fmt,
-		     struct hist_entry *left, struct hist_entry *right);
-int64_t rmt_peer_cmp(struct perf_hpp_fmt *fmt,
-		     struct hist_entry *left, struct hist_entry *right);
-int64_t lcl_peer_cmp(struct perf_hpp_fmt *fmt,
-		     struct hist_entry *left, struct hist_entry *right);
-int64_t tot_peer_cmp(struct perf_hpp_fmt *fmt,
-		     struct hist_entry *left, struct hist_entry *right);
-int64_t store_cmp(struct perf_hpp_fmt *fmt,
-		  struct hist_entry *left, struct hist_entry *right);
-int64_t st_l1hit_cmp(struct perf_hpp_fmt *fmt,
-		     struct hist_entry *left, struct hist_entry *right);
-int64_t st_l1miss_cmp(struct perf_hpp_fmt *fmt,
-		      struct hist_entry *left, struct hist_entry *right);
-int64_t st_na_cmp(struct perf_hpp_fmt *fmt,
-		  struct hist_entry *left, struct hist_entry *right);
-int64_t ld_fbhit_cmp(struct perf_hpp_fmt *fmt,
-		     struct hist_entry *left, struct hist_entry *right);
-int64_t ld_l1hit_cmp(struct perf_hpp_fmt *fmt,
-		     struct hist_entry *left, struct hist_entry *right);
-int64_t ld_l2hit_cmp(struct perf_hpp_fmt *fmt,
-		     struct hist_entry *left, struct hist_entry *right);
-int64_t ld_llchit_cmp(struct perf_hpp_fmt *fmt,
-		      struct hist_entry *left, struct hist_entry *right);
-int64_t rmt_hit_cmp(struct perf_hpp_fmt *fmt,
-		    struct hist_entry *left, struct hist_entry *right);
-int64_t lcl_dram_cmp(struct perf_hpp_fmt *fmt,
-		     struct hist_entry *left, struct hist_entry *right);
-int64_t rmt_dram_cmp(struct perf_hpp_fmt *fmt,
-		     struct hist_entry *left, struct hist_entry *right);
 
 /**
  * struct c2c_symbol_browser - Symbol browser for C2C analysis
@@ -383,4 +324,4 @@ static inline bool symbol_name_equal(struct symbol *a, struct symbol *b)
 	return a && b && strcmp(a->name, b->name) == 0;
 }
 
-#endif /* _PERF_BUILTIN_C2C_H_ */
+#endif /* _PERF_C2C_H_ */

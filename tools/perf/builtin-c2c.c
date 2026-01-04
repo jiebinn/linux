@@ -11,10 +11,12 @@
  *   Joe Mario <jmario@redhat.com>
  */
 #include <errno.h>
+#include <inttypes.h>
 #include <linux/compiler.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/stringify.h>
+#include <linux/zalloc.h>
 #include <asm/bug.h>
 #include <sys/param.h>
 #include "debug.h"
@@ -23,10 +25,21 @@
 #include <subcmd/pager.h>
 #include <subcmd/parse-options.h>
 #include "map_symbol.h"
+#include "mem-events.h"
+#include "session.h"
+#include "hist.h"
+#include "sort.h"
+#include "tool.h"
+#include "cacheline.h"
 #include "data.h"
 #include "event.h"
 #include "evlist.h"
 #include "evsel.h"
+#include "ui/browsers/hists.h"
+#include "thread.h"
+#include "mem2node.h"
+#include "mem-info.h"
+#include "symbol.h"
 #include "c2c.h"
 #include "ui/ui.h"
 #include "ui/progress.h"
@@ -533,7 +546,7 @@ __f ## _entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,	\
 }
 
 #define STAT_FN_CMP(__f)						\
-int64_t									\
+static int64_t								\
 __f ## _cmp(struct perf_hpp_fmt *fmt __maybe_unused,			\
 	    struct hist_entry *left, struct hist_entry *right)		\
 {									\

@@ -10,8 +10,33 @@
  * - Symbol browser UI components
  */
 
-#include "../../c2c.h"
 #include <unistd.h>
+#include <linux/list.h>
+#include <linux/bitmap.h>
+#include <linux/rbtree.h>
+#include <linux/zalloc.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+#include <inttypes.h>
+
+#include "addr_location.h"
+#include "ui/browsers/hists.h"
+#include "util/mem-events.h"
+#include "util/mem2node.h"
+#include "util/hist.h"
+#include "util/symbol.h"
+#include "util/tool.h"
+#include "../../c2c.h"
+#include "util/session.h"
+#include "util/env.h"
+#include "util/map.h"
+#include "util/maps.h"
+#include "util/sort.h"
+#include "util/mem-info.h"
+#include "util/cacheline.h"
+#include "util/debug.h"
+#include "util/thread.h"
 
 #define HITM_COUNT(stats) ((stats)->rmt_hitm + (stats)->lcl_hitm)
 
@@ -471,6 +496,20 @@ empty_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	  struct hist_entry *right __maybe_unused)
 {
 	return 0;
+}
+
+/**
+ * total_stores_cmp - Comparison function for total stores sorting in symbol view
+ */
+static int64_t
+total_stores_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
+		 struct hist_entry *left, struct hist_entry *right)
+{
+	struct c2c_hist_entry_ext *c2c_left = container_of(left, struct c2c_hist_entry_ext, c2c_he.he);
+	struct c2c_hist_entry_ext *c2c_right = container_of(right, struct c2c_hist_entry_ext, c2c_he.he);
+
+	return (uint64_t)c2c_left->c2c_he.stats.store -
+	       (uint64_t)c2c_right->c2c_he.stats.store;
 }
 
 /**
@@ -1886,7 +1925,7 @@ struct c2c_dimension dim_cycles_percent = {
 struct c2c_dimension dim_total_stores = {
 	.header		= HEADER_BOTH("Total", "Stores"),
 	.name		= "total_stores",
-	.cmp		= store_cmp,
+	.cmp		= total_stores_cmp,
 	.entry		= total_stores_entry,
 	.width		= 8,
 };
