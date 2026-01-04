@@ -112,7 +112,7 @@ static void c2c_he_free(void *he)
 	free(c2c_he);
 }
 
-struct hist_entry_ops c2c_entry_ops = {
+static struct hist_entry_ops c2c_entry_ops = {
 	.new	= c2c_he_zalloc,
 	.free	= c2c_he_free,
 };
@@ -323,6 +323,8 @@ static const char * const __usage_report[] = {
 
 static const char * const *report_c2c_usage = __usage_report;
 
+static struct c2c_dimension dim_symbol;
+static struct c2c_dimension dim_srcline;
 
 int symbol_width(struct hists *hists, struct sort_entry *se)
 {
@@ -1588,7 +1590,7 @@ static struct c2c_dimension dim_tid = {
 	.se		= &sort_thread,
 };
 
-struct c2c_dimension dim_symbol = {
+static struct c2c_dimension dim_symbol = {
 	.name		= "symbol",
 	.se		= &sort_sym,
 };
@@ -1654,8 +1656,7 @@ static struct c2c_dimension dim_cpucnt = {
 	.width		= 8,
 };
 
-
-struct c2c_dimension dim_srcline = {
+static struct c2c_dimension dim_srcline = {
 	.name		= "cl_srcline",
 	.se		= &sort_srcline,
 };
@@ -2564,7 +2565,7 @@ perf_c2c_browser__new(struct hists *hists)
 	return browser;
 }
 
-int perf_c2c__hists_browse(struct hists *hists)
+static int perf_c2c__hists_browse(struct hists *hists)
 {
 	struct hist_browser *browser;
 	int key = -1;

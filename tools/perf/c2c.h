@@ -311,10 +311,6 @@ struct perf_c2c_ext {
 extern struct perf_c2c c2c;
 extern struct perf_c2c_ext c2c_ext;
 
-/* Dimension declarations - defined in builtin-c2c.c */
-extern struct c2c_dimension dim_symbol;
-extern struct c2c_dimension dim_srcline;
-
 /**
  * symbol_width - Calculate width for symbol column
  * @hists: Histogram context
@@ -508,14 +504,6 @@ void cleanup_cacheline_symbol_index(void);
 void populate_symbol_children(struct hist_entry *he);
 
 /**
- * perf_c2c__hists_browse - Browse C2C histograms with cacheline view
- * @hists: Histograms to browse
- *
- * Returns: 0 on success, negative error code on failure
- */
-int perf_c2c__hists_browse(struct hists *hists);
-
-/**
  * perf_c2c__browse_cacheline - Display cacheline details browser
  * @he: Histogram entry for the cacheline to browse
  *
@@ -551,11 +539,5 @@ static inline bool symbol_name_equal(struct symbol *a, struct symbol *b)
  * including related symbols, histograms, and memory info.
  */
 void free_child_entries(struct hist_entry *parent_he);
-
-
-/**
- * c2c_entry_ops - Histogram entry operations for C2C
- */
-extern struct hist_entry_ops c2c_entry_ops;
 
 #endif /* _PERF_BUILTIN_C2C_H_ */
