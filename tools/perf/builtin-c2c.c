@@ -387,6 +387,12 @@ static int c2c_header(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	return scnprintf(hpp->buf, hpp->size, "%*s", width, text);
 }
 
+#define HEX_STR(__s, __v)				\
+({							\
+	scnprintf(__s, sizeof(__s), "0x%" PRIx64, __v);	\
+	__s;						\
+})
+
 static int64_t
 dcacheline_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	       struct hist_entry *left, struct hist_entry *right)
@@ -717,6 +723,12 @@ static double percent_costly_snoop(struct c2c_hist_entry *c2c_he)
 	return 100 * p;
 }
 
+#define PERC_STR(__s, __v)				\
+({							\
+	scnprintf(__s, sizeof(__s), "%.2F%%", __v);	\
+	__s;						\
+})
+
 static int
 percent_costly_snoop_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 			   struct hist_entry *he)
@@ -756,7 +768,7 @@ percent_costly_snoop_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	return per_left - per_right;
 }
 
-struct c2c_stats *he_stats(struct hist_entry *he)
+static struct c2c_stats *he_stats(struct hist_entry *he)
 {
 	struct c2c_hist_entry *c2c_he;
 
@@ -764,13 +776,20 @@ struct c2c_stats *he_stats(struct hist_entry *he)
 	return &c2c_he->stats;
 }
 
-struct c2c_stats *total_stats(struct hist_entry *he)
+static struct c2c_stats *total_stats(struct hist_entry *he)
 {
 	struct c2c_hists *hists;
 
 	hists = container_of(he->hists, struct c2c_hists, hists);
 	return &hists->stats;
 }
+
+static inline double percent(u32 st, u32 tot)
+{
+	return tot ? 100. * (double) st / (double) tot : 0;
+}
+
+#define PERCENT(__h, __f) percent(he_stats(__h)->__f, total_stats(__h)->__f)
 
 #define PERCENT_FN(__f)								\
 static double percent_ ## __f(struct c2c_hist_entry *c2c_he)			\

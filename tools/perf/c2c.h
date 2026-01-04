@@ -95,19 +95,6 @@ struct c2c_fmt {
 	struct c2c_dimension	*dim;
 };
 
-/* Helper macros for string formatting */
-#define HEX_STR(__s, __v)				\
-({							\
-	scnprintf(__s, sizeof(__s), "0x%" PRIx64, __v);	\
-	__s;						\
-})
-
-#define PERC_STR(__s, __v)				\
-({							\
-	scnprintf(__s, sizeof(__s), "%.2F%%", __v);	\
-	__s;						\
-})
-
 /**
  * struct compute_stats - Statistics computed from memory access samples
  * @lcl_hitm: Local HITM statistics
@@ -329,37 +316,6 @@ int symbol_width(struct hists *hists, struct sort_entry *se);
  * Returns: Column width based on dimension configuration
  */
 int c2c_width(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp, struct hists *hists);
-
-/**
- * he_stats - Get C2C statistics for a histogram entry
- * @he: Histogram entry
- *
- * Returns: Pointer to C2C stats for this entry
- */
-struct c2c_stats *he_stats(struct hist_entry *he);
-
-/**
- * total_stats - Get total C2C statistics for histogram
- * @he: Histogram entry
- *
- * Returns: Pointer to total C2C stats for the histogram
- */
-struct c2c_stats *total_stats(struct hist_entry *he);
-
-/**
- * percent - Calculate percentage
- * @st: Part value
- * @tot: Total value
- *
- * Returns: Percentage as double
- */
-static inline double percent(u32 st, u32 tot)
-{
-	return tot ? 100. * (double) st / (double) tot : 0;
-}
-
-/* Macro for calculating percentage of a field */
-#define PERCENT(__h, __f) percent(he_stats(__h)->__f, total_stats(__h)->__f)
 
 /* Entry functions for symbol view - defined in c2c-symbol.c */
 int total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,

@@ -13,8 +13,13 @@
 #include "../../c2c.h"
 #include <unistd.h>
 
-/* Helper macros for common C2C operations */
 #define HITM_COUNT(stats) ((stats)->rmt_hitm + (stats)->lcl_hitm)
+
+#define HEX_STR(__s, __v)				\
+({							\
+	scnprintf(__s, sizeof(__s), "0x%" PRIx64, __v);	\
+	__s;						\
+})
 
 /* Forward declarations for functions used before their definitions */
 static uint64_t get_total_cycles_all_symbols(void);
@@ -1458,9 +1463,9 @@ int build_symbol_hists(void)
 
 				/* Create consistent address location for symbol aggregation */
 				addr_location__init(&al);
-				al.thread = synthetic_thread;
-				al.maps = sa->maps;
-				al.map = sa->map;
+				al.thread = thread__get(synthetic_thread);
+				al.maps = maps__get(sa->maps);
+				al.map = map__get(sa->map);
 				al.sym = sa->sym;
 				al.addr = sa->iaddr;
 				al.level = PERF_RECORD_MISC_KERNEL;
