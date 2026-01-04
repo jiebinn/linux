@@ -298,29 +298,6 @@ struct perf_c2c_ext {
 extern struct perf_c2c c2c;
 extern struct perf_c2c_ext c2c_ext;
 
-/* Entry functions for symbol view - defined in c2c-symbol.c */
-int total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-		       struct hist_entry *he);
-int cacheline_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-			   struct hist_entry *he);
-int symbol_view_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-		     struct hist_entry *he);
-int cycles_rmt_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-			  struct hist_entry *he);
-int cycles_lcl_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-			  struct hist_entry *he);
-int cycles_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-		      struct hist_entry *he);
-int cycles_total_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-		       struct hist_entry *he);
-int cnt_other_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-			 struct hist_entry *he);
-int cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-			 struct hist_entry *he);
-int64_t cycles_percent_cmp(struct perf_hpp_fmt *fmt,
-			   struct hist_entry *left, struct hist_entry *right);
-int64_t empty_cmp(struct perf_hpp_fmt *fmt,
-		  struct hist_entry *left, struct hist_entry *right);
 
 /* STAT_FN generated comparison functions */
 int64_t rmt_hitm_cmp(struct perf_hpp_fmt *fmt,
@@ -371,76 +348,6 @@ struct c2c_symbol_browser {
 };
 
 /**
- * c2c_symbol_browser__new - Create a new C2C symbol browser
- * @hists: Symbol histograms to display
- *
- * Returns: Pointer to newly created browser, or NULL on error
- */
-struct c2c_symbol_browser *c2c_symbol_browser__new(struct hists *hists);
-
-/**
- * c2c_symbol_browser__delete - Free a C2C symbol browser
- * @browser: Browser to free
- */
-void c2c_symbol_browser__delete(struct c2c_symbol_browser *browser);
-
-/**
- * c2c_symbol_browser__handle_expand - Handle expand/collapse operation
- * @browser: Symbol browser instance
- *
- * Returns: 0 on success, negative value on error
- */
-int c2c_symbol_browser__handle_expand(struct c2c_symbol_browser *browser);
-
-/**
- * c2c_symbol_browser__browse_cacheline_detail - Handle cacheline detail view
- * @browser: Symbol browser instance
- * @he_selection: Selected histogram entry
- * @hists: Main cacheline hists
- *
- * Returns: 0 on success, negative value on error
- */
-int c2c_symbol_browser__browse_cacheline_detail(struct c2c_symbol_browser *browser,
-					       struct hist_entry *he_selection,
-					       struct hists *hists);
-
-/**
- * build_symbol_hists - Build symbol-level histograms from cacheline data
- *
- * Creates symbol_hists by aggregating cacheline data by symbol,
- * building the cacheline index, and establishing symbol associations.
- *
- * Returns: 0 on success, negative error code on failure
- */
-int build_symbol_hists(void);
-
-/**
- * build_cacheline_symbol_index - Build index mapping cachelines to symbols
- *
- * Creates an optimized index structure for looking up which symbols
- * access each cacheline. This is used for building symbol associations
- * and populating child entries efficiently.
- */
-void build_cacheline_symbol_index(void);
-
-/**
- * cleanup_cacheline_symbol_index - Free the cacheline symbol index
- *
- * Releases all memory associated with the cacheline index.
- * Should be called at program exit.
- */
-void cleanup_cacheline_symbol_index(void);
-
-/**
- * populate_symbol_children - Create child entries for a symbol
- * @he: Parent histogram entry to populate
- *
- * Creates child entries (related symbols) under the given parent entry.
- * Each child represents a symbol that shares a cacheline with the parent.
- */
-void populate_symbol_children(struct hist_entry *he);
-
-/**
  * perf_c2c__browse_cacheline - Display cacheline details browser
  * @he: Histogram entry for the cacheline to browse
  *
@@ -457,6 +364,14 @@ int perf_c2c__browse_cacheline(struct hist_entry *he);
 int perf_c2c__browse_symbol_view(struct hists *hists);
 
 /**
+ * cleanup_cacheline_symbol_index - Free the cacheline symbol index
+ *
+ * Releases all memory associated with the cacheline index.
+ * Should be called at program exit.
+ */
+void cleanup_cacheline_symbol_index(void);
+
+/**
  * symbol_name_equal - Compare two symbols by name
  * @a: First symbol
  * @b: Second symbol
@@ -467,14 +382,5 @@ static inline bool symbol_name_equal(struct symbol *a, struct symbol *b)
 {
 	return a && b && strcmp(a->name, b->name) == 0;
 }
-
-/**
- * free_child_entries - Free child entries of a histogram entry
- * @parent_he: Parent histogram entry whose children to free
- *
- * Recursively frees all child entries and their associated resources
- * including related symbols, histograms, and memory info.
- */
-void free_child_entries(struct hist_entry *parent_he);
 
 #endif /* _PERF_BUILTIN_C2C_H_ */

@@ -1044,7 +1044,7 @@ pid_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	return thread__pid(left->thread) - thread__pid(right->thread);
 }
 
-int64_t
+static int64_t
 empty_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	  struct hist_entry *left __maybe_unused,
 	  struct hist_entry *right __maybe_unused)
@@ -3108,7 +3108,6 @@ out_mem2node:
 out_session:
 	perf_session__delete(session);
 out:
-	/* Clean up cacheline index on exit */
 	cleanup_cacheline_symbol_index();
 	return err;
 }

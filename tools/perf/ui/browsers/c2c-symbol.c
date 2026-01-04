@@ -29,6 +29,7 @@ static int c2c_symbol_hists__init(struct c2c_hists *hists, const char *sort,
 static int c2c_symbol_hists__reinit(struct c2c_hists *c2c_hists,
 				   const char *output, const char *sort,
 				   struct perf_env *env);
+static void free_child_entries(struct hist_entry *parent_he);
 
 /**
  * c2c_he_ext_zalloc - Allocate extended histogram entry for symbol view
@@ -129,7 +130,7 @@ static struct hist_entry_ops c2c_symbol_entry_ops = {
 /**
  * total_stores_entry - Render total stores column for symbol view
  */
-int
+static int
 total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		   struct hist_entry *he)
 {
@@ -160,7 +161,7 @@ total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 /**
  * cacheline_symbol_entry - Render cacheline address for symbol view
  */
-int
+static int
 cacheline_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		       struct hist_entry *he)
 {
@@ -221,7 +222,7 @@ iaddr_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 /**
  * symbol_view_entry - Render symbol name for symbol view with expansion indicators
  */
-int
+static int
 symbol_view_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		 struct hist_entry *he)
 {
@@ -256,7 +257,7 @@ symbol_view_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 /**
  * cycles_rmt_hitm_entry - Render remote HITM cycles column
  */
-int
+static int __maybe_unused
 cycles_rmt_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		      struct hist_entry *he)
 {
@@ -278,7 +279,7 @@ cycles_rmt_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 /**
  * cycles_lcl_hitm_entry - Render local HITM cycles column
  */
-int
+static int __maybe_unused
 cycles_lcl_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		      struct hist_entry *he)
 {
@@ -303,7 +304,7 @@ cycles_lcl_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 /**
  * cycles_load_entry - Render load cycles column
  */
-int
+static int __maybe_unused
 cycles_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		   struct hist_entry *he)
 {
@@ -332,7 +333,7 @@ cycles_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 /**
  * cycles_total_entry - Render total cycles column
  */
-int
+static int __maybe_unused
 cycles_total_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		   struct hist_entry *he)
 {
@@ -361,7 +362,7 @@ cycles_total_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 /**
  * cnt_other_load_entry - Render other load count column
  */
-int
+static int __maybe_unused
 cnt_other_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		     struct hist_entry *he)
 {
@@ -389,7 +390,7 @@ cnt_other_load_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 /**
  * cycles_percent_entry - Render cycles percentage column
  */
-int
+static int
 cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		     struct hist_entry *he)
 {
@@ -424,7 +425,7 @@ cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 /**
  * cycles_percent_cmp - Comparison function for cycles percentage sorting
  */
-int64_t
+static int64_t
 cycles_percent_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 		   struct hist_entry *left, struct hist_entry *right)
 {
@@ -462,6 +463,14 @@ iaddr_symbol_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 		   struct hist_entry *left, struct hist_entry *right)
 {
 	return sort__iaddr_cmp(left, right);
+}
+
+static int64_t
+empty_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
+	  struct hist_entry *left __maybe_unused,
+	  struct hist_entry *right __maybe_unused)
+{
+	return 0;
 }
 
 /**
@@ -827,7 +836,7 @@ static struct hist_entry *create_symbol_child_entry(struct hist_entry *parent_he
  * access each cacheline. This is used for building symbol associations
  * and populating child entries efficiently.
  */
-void build_cacheline_symbol_index(void)
+static void build_cacheline_symbol_index(void)
 {
 	struct rb_node *nd_cl;
 	int index = 0;
@@ -1090,7 +1099,7 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
  * Creates child entries (related symbols) under the given parent entry.
  * Each child represents a symbol that shares a cacheline with the parent.
  */
-void populate_symbol_children(struct hist_entry *he)
+static void populate_symbol_children(struct hist_entry *he)
 {
 	struct c2c_hist_entry_ext *c2c_he;
 	struct related_symbol **sorted;
@@ -1396,7 +1405,7 @@ static uint64_t get_total_cycles_all_symbols(void)
  *
  * Returns: 0 on success, negative error code on failure
  */
-int build_symbol_hists(void)
+static int build_symbol_hists(void)
 {
 	struct rb_node *next;
 	struct hist_entry *he_sym;
@@ -1548,7 +1557,7 @@ static int c2c_symbol_browser__title(struct hist_browser *browser,
 /**
  * c2c_symbol_browser__new - Create new symbol browser instance
  */
-struct c2c_symbol_browser *c2c_symbol_browser__new(struct hists *hists)
+static struct c2c_symbol_browser *c2c_symbol_browser__new(struct hists *hists)
 {
 	struct c2c_symbol_browser *browser;
 
@@ -1577,7 +1586,7 @@ struct c2c_symbol_browser *c2c_symbol_browser__new(struct hists *hists)
 /**
  * c2c_symbol_browser__delete - Free symbol browser
  */
-void c2c_symbol_browser__delete(struct c2c_symbol_browser *browser)
+static void c2c_symbol_browser__delete(struct c2c_symbol_browser *browser)
 {
 	if (browser) {
 		/* Base browser cleanup is handled by hist_browser__delete */
@@ -1588,7 +1597,7 @@ void c2c_symbol_browser__delete(struct c2c_symbol_browser *browser)
 /**
  * c2c_symbol_browser__handle_expand - Handle expand/collapse operation
  */
-int c2c_symbol_browser__handle_expand(struct c2c_symbol_browser *browser)
+static int c2c_symbol_browser__handle_expand(struct c2c_symbol_browser *browser)
 {
 	struct hist_entry *he = browser->hb.he_selection;
 
@@ -1616,7 +1625,7 @@ int c2c_symbol_browser__handle_expand(struct c2c_symbol_browser *browser)
 /**
  * c2c_symbol_browser__browse_cacheline_detail - Handle cacheline detail view
  */
-int c2c_symbol_browser__browse_cacheline_detail(struct c2c_symbol_browser *browser,
+static int c2c_symbol_browser__browse_cacheline_detail(struct c2c_symbol_browser *browser,
 					       struct hist_entry *he_selection,
 					       struct hists *hists)
 {
@@ -1720,7 +1729,7 @@ out:
  * Recursively frees all child entries and their associated resources
  * including related symbols, histograms, and memory info.
  */
-void free_child_entries(struct hist_entry *parent_he)
+static void free_child_entries(struct hist_entry *parent_he)
 {
 	struct rb_node *nd;
 	struct hist_entry *child_he;
