@@ -208,24 +208,15 @@ iaddr_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 }
 
 /**
- * symbol_entry - Render symbol name with expansion indicators
+ * symbol_view_entry - Render symbol name for symbol view with expansion indicators
  */
 int
-symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-	     struct hist_entry *he)
+symbol_view_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		 struct hist_entry *he)
 {
-	struct c2c_fmt *c2c_fmt = container_of(fmt, struct c2c_fmt, fmt);
-	struct c2c_dimension *dim = c2c_fmt->dim;
-	size_t len = fmt->user_len;
 	const char *symname = he->ms.sym ? he->ms.sym->name : "[unknown]";
 	int width = c2c_width(fmt, hpp, he->hists);
 	char buf[KSYM_NAME_LEN];
-
-	if (!len) {
-		len = hists__col_len(he->hists, dim->se->se_width_idx);
-		if (dim == &dim_symbol)
-			len = symbol_width(he->hists, dim->se);
-	}
 
 	/* Hide Symbol for cacheline entries */
 	if (he->parent_he && he->parent_he->parent_he)
@@ -1415,14 +1406,14 @@ int build_symbol_hists(void)
 	/* Clean up previous symbol hists entries before initializing */
 	hists__delete_entries(&c2c_ext.symbol_hists.hists);
 
-	/* Initialize symbol hists with sort by iaddr (code address) and symbol */
-	ret = c2c_hists__init(&c2c_ext.symbol_hists, "iaddr_symbol,symbol", 2, NULL);
+	/* Initialize symbol hists with sort by iaddr (code address) and symbol_view */
+	ret = c2c_hists__init(&c2c_ext.symbol_hists, "iaddr_symbol,symbol_view", 2, NULL);
 	if (ret)
 		return ret;
 
 	/* Setup output fields for symbol view - sorted by cycles percentage (descending) */
 	ret = c2c_hists__reinit(&c2c_ext.symbol_hists,
-		"cycles_percent,total_stores,iaddr_symbol,symbol,cacheline_symbol",
+		"cycles_percent,total_stores,iaddr_symbol,symbol_view,cacheline_symbol",
 		"cycles_percent", NULL);
 	if (ret)
 		return ret;
@@ -1807,5 +1798,11 @@ struct c2c_dimension dim_iaddr_symbol = {
 	.cmp		= iaddr_symbol_cmp,
 	.entry		= iaddr_symbol_entry,
 	.width		= 18,
+};
+
+struct c2c_dimension dim_symbol_view = {
+	.name		= "symbol_view",
+	.entry		= symbol_view_entry,
+	.width		= SYMBOL_WIDTH,
 };
 

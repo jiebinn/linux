@@ -370,8 +370,8 @@ int total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		       struct hist_entry *he);
 int cacheline_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 			   struct hist_entry *he);
-int symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-		 struct hist_entry *he);
+int symbol_view_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		     struct hist_entry *he);
 int cycles_rmt_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 			  struct hist_entry *he);
 int cycles_lcl_hitm_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
@@ -588,5 +588,6 @@ extern struct c2c_dimension dim_cycles_percent;
 extern struct c2c_dimension dim_total_stores;
 extern struct c2c_dimension dim_cacheline_symbol;
 extern struct c2c_dimension dim_iaddr_symbol;
+extern struct c2c_dimension dim_symbol_view;
 
 #endif /* _PERF_BUILTIN_C2C_H_ */

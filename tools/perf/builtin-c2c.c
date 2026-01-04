@@ -318,8 +318,6 @@ static const char * const __usage_report[] = {
 
 static const char * const *report_c2c_usage = __usage_report;
 
-struct c2c_dimension dim_symbol;
-struct c2c_dimension dim_srcline;
 
 int symbol_width(struct hists *hists, struct sort_entry *se)
 {
@@ -1588,7 +1586,6 @@ static struct c2c_dimension dim_tid = {
 struct c2c_dimension dim_symbol = {
 	.name		= "symbol",
 	.se		= &sort_sym,
-	.entry		= symbol_entry,
 };
 
 static struct c2c_dimension dim_dso = {
@@ -1742,6 +1739,7 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_dcacheline_idx,
 	&dim_dcacheline_num,
 	&dim_dcacheline_num_empty,
+	&dim_symbol_view,
 	NULL,
 };
 
@@ -1788,10 +1786,6 @@ static int c2c_se_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		if (dim == &dim_symbol || dim == &dim_srcline)
 			len = symbol_width(he->hists, dim->se);
 	}
-
-	/* Use custom symbol entry only in symbol view to avoid altering cacheline view alignment */
-	if (dim == &dim_symbol && he->hists == &c2c_ext.symbol_hists.hists)
-		return symbol_entry(fmt, hpp, he);
 
 	return dim->se->se_snprintf(he, hpp->buf, hpp->size, len);
 }
