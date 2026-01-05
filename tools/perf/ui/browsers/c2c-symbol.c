@@ -46,6 +46,8 @@
 	__s;						\
 })
 
+struct perf_c2c_ext c2c_ext;
+
 /* Forward declarations for functions used before their definitions */
 static int c2c_width(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp, struct hists *hists);
 static uint64_t get_total_cycles_all_symbols(void);
@@ -1000,30 +1002,6 @@ static void build_cacheline_symbol_index(void)
 
 	/* Mark as built to prevent redundant calls */
 	c2c_ext.cacheline_index_built = true;
-}
-
-/**
- * cleanup_cacheline_symbol_index - Free the cacheline symbol index
- */
-void cleanup_cacheline_symbol_index(void)
-{
-	if (c2c_ext.cacheline_index) {
-		for (int i = 0; i < c2c_ext.cacheline_index_size; i++) {
-			struct symbol_access *sa = c2c_ext.cacheline_index[i].symbol_accesses;
-
-			while (sa) {
-				struct symbol_access *next = sa->next;
-
-				free(sa);
-				sa = next;
-			}
-		}
-		free(c2c_ext.cacheline_index);
-		c2c_ext.cacheline_index = NULL;
-		c2c_ext.cacheline_index_size = 0;
-		c2c_ext.cacheline_index_capacity = 0;
-		c2c_ext.cacheline_index_built = false;
-	}
 }
 
 /**

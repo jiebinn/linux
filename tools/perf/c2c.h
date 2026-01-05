@@ -268,11 +268,8 @@ struct perf_c2c_ext {
 	bool		cacheline_index_built;
 };
 
-/* Global C2C context - defined in builtin-c2c.c */
 extern struct perf_c2c c2c;
 extern struct perf_c2c_ext c2c_ext;
-
-
 
 /**
  * struct c2c_symbol_browser - Symbol browser for C2C analysis
@@ -303,14 +300,6 @@ int perf_c2c__browse_cacheline(struct hist_entry *he);
  * Returns: 0 on success, negative error code on failure
  */
 int perf_c2c__browse_symbol_view(struct hists *hists);
-
-/**
- * cleanup_cacheline_symbol_index - Free the cacheline symbol index
- *
- * Releases all memory associated with the cacheline index.
- * Should be called at program exit.
- */
-void cleanup_cacheline_symbol_index(void);
 
 /**
  * symbol_name_equal - Compare two symbols by name

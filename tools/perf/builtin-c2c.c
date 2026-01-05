@@ -71,7 +71,6 @@ static const struct option c2c_options[] = {
 };
 
 struct perf_c2c c2c;
-struct perf_c2c_ext c2c_ext;
 
 static void *c2c_he_zalloc(size_t size)
 {
@@ -3121,7 +3120,6 @@ out_mem2node:
 out_session:
 	perf_session__delete(session);
 out:
-	cleanup_cacheline_symbol_index();
 	return err;
 }
 
