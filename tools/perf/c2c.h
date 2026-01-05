@@ -2,81 +2,6 @@
 #ifndef _PERF_C2C_H_
 #define _PERF_C2C_H_ 1
 
-/* Constants */
-#define SYMBOL_WIDTH 30
-#define C2C_HEADER_MAX 2
-
-/* Header macros for dimension definitions */
-#define HEADER_LOW(__h)			\
-	{				\
-		.line[1] = {		\
-			.text = __h,	\
-		},			\
-	}
-
-#define HEADER_BOTH(__h0, __h1)		\
-	{				\
-		.line[0] = {		\
-			.text = __h0,	\
-		},			\
-		.line[1] = {		\
-			.text = __h1,	\
-		},			\
-	}
-
-/**
- * struct c2c_header - Column header definition for C2C display
- * @line: Array of header lines with text and span
- */
-struct c2c_header {
-	struct {
-		const char *text;
-		int	    span;
-	} line[C2C_HEADER_MAX];
-};
-
-/**
- * struct c2c_dimension - Definition of a display column for C2C
- * @header: Column header text and span
- * @name: Column name for configuration
- * @width: Default column width
- * @se: Sort entry if this dimension uses standard sorting
- * @cmp: Comparison function for sorting
- * @entry: Entry rendering function
- * @color: Colored entry rendering function (optional)
- */
-struct c2c_dimension {
-	struct c2c_header	 header;
-	const char		*name;
-	int			 width;
-	struct sort_entry	*se;
-
-	int64_t (*cmp)(struct perf_hpp_fmt *fmt,
-		       struct hist_entry *, struct hist_entry *);
-	int   (*entry)(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-		       struct hist_entry *he);
-	int   (*color)(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
-		       struct hist_entry *he);
-};
-
-/**
- * struct c2c_fmt - Format wrapper for C2C dimensions
- * @fmt: Base perf HPP format structure
- * @dim: Pointer to the C2C dimension
- */
-struct c2c_fmt {
-	struct perf_hpp_fmt	 fmt;
-	struct c2c_dimension	*dim;
-};
-
-/**
- * struct compute_stats - Statistics computed from memory access samples
- * @lcl_hitm: Local HITM statistics
- * @rmt_hitm: Remote HITM statistics
- * @lcl_peer: Local peer snoop statistics
- * @rmt_peer: Remote peer snoop statistics
- * @load: Load statistics
- */
 struct compute_stats {
 	struct stats		 lcl_hitm;
 	struct stats		 rmt_hitm;
@@ -85,12 +10,6 @@ struct compute_stats {
 	struct stats		 load;
 };
 
-/**
- * struct c2c_hists - C2C histogram container
- * @hists: Base histogram structure
- * @list: HPP list for column formatting
- * @stats: Aggregated C2C statistics
- */
 struct c2c_hists {
 	struct hists		hists;
 	struct perf_hpp_list	list;
@@ -182,30 +101,6 @@ struct cacheline_symbol_entry {
 	struct symbol_access	*symbol_accesses;
 };
 
-/**
- * struct perf_c2c - Main C2C analysis context
- * @tool: Base perf tool structure
- * @hists: Main cacheline histograms
- * @mem2node: Memory to node mapping
- * @nodes: Array of CPU bitmaps per node
- * @nodes_cnt: Number of NUMA nodes
- * @cpus_cnt: Number of CPUs
- * @cpu2node: CPU to node mapping
- * @node_info: Node display mode (0, 1, or 2)
- * @show_src: Show source line information
- * @show_all: Show all entries (not just shared)
- * @use_stdio: Use stdio instead of TUI
- * @stats_only: Show statistics only
- * @symbol_full: Show full symbol names
- * @stitch_lbr: Stitch LBR callchains
- * @shared_clines_stats: Statistics for shared cachelines
- * @shared_clines: Count of shared cachelines
- * @display: Current display mode
- * @coalesce: Coalesce settings
- * @cl_sort: Cacheline sort string
- * @cl_resort: Cacheline resort string
- * @cl_output: Cacheline output columns
- */
 struct perf_c2c {
 	struct perf_tool	tool;
 	struct c2c_hists	hists;
