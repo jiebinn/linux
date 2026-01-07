@@ -133,7 +133,6 @@ struct perf_c2c {
 
 /**
  * struct perf_c2c_ext - Extended C2C analysis context for symbol view
- * @c2c: Base C2C analysis context
  * @symbol_hists: Symbol-grouped histograms for symbol view
  * @symbol_total_cycles: Cached total cycles across all symbols for percent column
  * @symbol_total_cycles_valid: Whether symbol_total_cycles is valid
@@ -147,8 +146,6 @@ struct perf_c2c {
  * tools/perf/builtin-c2c.c for cacheline view functionality.
  */
 struct perf_c2c_ext {
-	struct perf_c2c		c2c;
-
 	/* Symbol view histograms */
 	struct c2c_hists	symbol_hists;
 
