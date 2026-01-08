@@ -39,21 +39,6 @@ struct c2c_hist_entry {
 };
 
 /**
- * struct c2c_hist_entry_ext - Extended histogram entry for C2C analysis
- * @related_symbols: List of symbols that share this cacheline
- * @c2c_he: Base histogram entry structure (must be last due to dynamic callchain)
- *
- * Note: c2c_he must be the last field because hist_entry (inside c2c_he) has
- * dynamic callchain data that is allocated immediately after it.
- */
-struct c2c_hist_entry_ext {
-	/* Symbol association support */
-	struct list_head	related_symbols;
-
-	struct c2c_hist_entry c2c_he;
-};
-
-/**
  * struct related_symbol - Symbol that shares a cacheline with another symbol
  * @list: List node for linking in c2c_hist_entry.related_symbols
  * @sym: Pointer to the symbol
@@ -101,6 +86,23 @@ struct cacheline_symbol_entry {
 	struct symbol_access	*symbol_accesses;
 };
 
+/**
+ * struct symbol_relations_entry - Entry in the symbol relations lookup table
+ * @node: RB-tree node for symbol lookup
+ * @parent_sym: Parent symbol
+ * @parent_iaddr: Parent symbol's instruction address
+ * @related_symbols: List of related symbols that share cachelines with parent
+ *
+ * This structure maps a parent symbol to its related symbols, enabling
+ * efficient lookup without embedding the relationship data in hist_entry.
+ */
+struct symbol_relations_entry {
+	struct rb_node		 node;
+	struct symbol		*parent_sym;
+	uint64_t		 parent_iaddr;
+	struct list_head	 related_symbols;
+};
+
 struct perf_c2c {
 	struct perf_tool	tool;
 	struct c2c_hists	hists;
@@ -140,6 +142,7 @@ struct perf_c2c {
  * @cacheline_index_size: Number of entries in cacheline_index
  * @cacheline_index_capacity: Capacity of cacheline_index array
  * @cacheline_index_built: Whether the index has been built
+ * @relations_root: RB-tree root for symbol relationships lookup
  *
  * This extended structure is used only in tools/perf/ui/browsers/c2c-symbol.c
  * for symbol view functionality, while the base perf_c2c is used in
@@ -158,6 +161,9 @@ struct perf_c2c_ext {
 	int			cacheline_index_size;
 	int			cacheline_index_capacity;
 	bool		cacheline_index_built;
+
+	/* Symbol relationships lookup table */
+	struct rb_root		relations_root;
 };
 
 extern struct perf_c2c c2c;
@@ -204,5 +210,42 @@ static inline bool symbol_name_equal(struct symbol *a, struct symbol *b)
 {
 	return a && b && strcmp(a->name, b->name) == 0;
 }
+
+/**
+ * symbol_relations_init - Initialize the symbol relations table
+ * @relations_root: RB-tree root to initialize
+ */
+void symbol_relations_init(struct rb_root *relations_root);
+
+/**
+ * symbol_relations_destroy - Destroy and free all symbol relations
+ * @relations_root: RB-tree root containing relations
+ */
+void symbol_relations_destroy(struct rb_root *relations_root);
+
+/**
+ * symbol_relations_add - Add a related symbol to the relations table
+ * @relations_root: RB-tree root for symbol relations
+ * @parent_sym: Parent symbol
+ * @parent_iaddr: Parent symbol's instruction address
+ * @rel_sym: Related symbol to add
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+int symbol_relations_add(struct rb_root *relations_root,
+			 struct symbol *parent_sym, uint64_t parent_iaddr,
+			 struct related_symbol *rel_sym);
+
+/**
+ * symbol_relations_lookup - Look up related symbols for a parent symbol
+ * @relations_root: RB-tree root for symbol relations
+ * @parent_sym: Parent symbol to lookup
+ * @parent_iaddr: Parent symbol's instruction address
+ *
+ * Returns: List of related symbols, or NULL if not found
+ */
+struct list_head *symbol_relations_lookup(struct rb_root *relations_root,
+					  struct symbol *parent_sym,
+					  uint64_t parent_iaddr);
 
 #endif /* _PERF_C2C_H_ */

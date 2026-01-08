@@ -104,89 +104,221 @@ static int c2c_symbol_hists__reinit(struct c2c_hists *c2c_hists,
 				   struct perf_env *env);
 static void free_child_entries(struct hist_entry *parent_he);
 
-/**
- * c2c_he_ext_zalloc - Allocate extended histogram entry for symbol view
- * @size: Size needed for hist_entry including dynamic callchain data
- *
- * Returns: Pointer to hist_entry within allocated c2c_hist_entry_ext, or NULL on failure
+/*
+ * Symbol Relations Table Implementation
+ * These functions manage the external lookup table for symbol relationships
  */
-static void *c2c_he_ext_zalloc(size_t size)
+
+/**
+ * symbol_relations_init - Initialize the symbol relations table
+ */
+void symbol_relations_init(struct rb_root *relations_root)
 {
-	struct c2c_hist_entry_ext *c2c_he_ext;
+	*relations_root = RB_ROOT;
+}
 
-	/* Allocate extended structure plus space for hist_entry dynamic data
-	 * size contains the space needed for hist_entry's dynamic part (callchain)
-	 * sizeof(*c2c_he_ext) already includes the static hist_entry size
-	 */
-	c2c_he_ext = zalloc(size + sizeof(*c2c_he_ext));
-	if (!c2c_he_ext)
-		return NULL;
+/**
+ * symbol_relations_find - Find a symbol relations entry
+ */
+static struct symbol_relations_entry *
+symbol_relations_find(struct rb_root *relations_root,
+		      struct symbol *parent_sym, uint64_t parent_iaddr)
+{
+	struct rb_node *node = relations_root->rb_node;
 
-	/* Initialize extended fields first (they come before c2c_he in the structure) */
-	INIT_LIST_HEAD(&c2c_he_ext->related_symbols);
+	while (node) {
+		struct symbol_relations_entry *entry;
 
-	c2c_he_ext->c2c_he.cpuset = bitmap_zalloc(c2c.cpus_cnt);
-	if (!c2c_he_ext->c2c_he.cpuset)
-		goto out_free;
+		entry = rb_entry(node, struct symbol_relations_entry, node);
 
-	c2c_he_ext->c2c_he.nodeset = bitmap_zalloc(c2c.nodes_cnt);
-	if (!c2c_he_ext->c2c_he.nodeset)
-		goto out_free;
-
-	c2c_he_ext->c2c_he.node_stats = zalloc(c2c.nodes_cnt * sizeof(*c2c_he_ext->c2c_he.node_stats));
-	if (!c2c_he_ext->c2c_he.node_stats)
-		goto out_free;
-
-	init_stats(&c2c_he_ext->c2c_he.cstats.lcl_hitm);
-	init_stats(&c2c_he_ext->c2c_he.cstats.rmt_hitm);
-	init_stats(&c2c_he_ext->c2c_he.cstats.lcl_peer);
-	init_stats(&c2c_he_ext->c2c_he.cstats.rmt_peer);
-	init_stats(&c2c_he_ext->c2c_he.cstats.load);
-
-	return &c2c_he_ext->c2c_he.he;
-
-out_free:
-	zfree(&c2c_he_ext->c2c_he.nodeset);
-	zfree(&c2c_he_ext->c2c_he.cpuset);
-	free(c2c_he_ext);
+		if (parent_sym < entry->parent_sym)
+			node = node->rb_left;
+		else if (parent_sym > entry->parent_sym)
+			node = node->rb_right;
+		else if (parent_iaddr < entry->parent_iaddr)
+			node = node->rb_left;
+		else if (parent_iaddr > entry->parent_iaddr)
+			node = node->rb_right;
+		else
+			return entry;
+	}
 	return NULL;
 }
 
 /**
- * c2c_he_ext_free - Free extended histogram entry for symbol view
+ * symbol_relations_insert - Insert a new symbol relations entry
+ */
+static int symbol_relations_insert(struct rb_root *relations_root,
+				   struct symbol_relations_entry *entry)
+{
+	struct rb_node **p = &relations_root->rb_node;
+	struct rb_node *parent = NULL;
+
+	while (*p != NULL) {
+		struct symbol_relations_entry *existing;
+
+		parent = *p;
+		existing = rb_entry(parent, struct symbol_relations_entry, node);
+
+		if (entry->parent_sym < existing->parent_sym)
+			p = &(*p)->rb_left;
+		else if (entry->parent_sym > existing->parent_sym)
+			p = &(*p)->rb_right;
+		else if (entry->parent_iaddr < existing->parent_iaddr)
+			p = &(*p)->rb_left;
+		else if (entry->parent_iaddr > existing->parent_iaddr)
+			p = &(*p)->rb_right;
+		else
+			return -1; /* Already exists */
+	}
+
+	rb_link_node(&entry->node, parent, p);
+	rb_insert_color(&entry->node, relations_root);
+	return 0;
+}
+
+/**
+ * symbol_relations_add - Add a related symbol to the relations table
+ */
+int symbol_relations_add(struct rb_root *relations_root,
+			 struct symbol *parent_sym, uint64_t parent_iaddr,
+			 struct related_symbol *rel_sym)
+{
+	struct symbol_relations_entry *entry;
+
+	/* Find or create entry for this parent symbol */
+	entry = symbol_relations_find(relations_root, parent_sym, parent_iaddr);
+	if (!entry) {
+		entry = zalloc(sizeof(*entry));
+		if (!entry)
+			return -ENOMEM;
+
+		entry->parent_sym = parent_sym;
+		entry->parent_iaddr = parent_iaddr;
+		INIT_LIST_HEAD(&entry->related_symbols);
+
+		if (symbol_relations_insert(relations_root, entry) < 0) {
+			free(entry);
+			return -EEXIST;
+		}
+	}
+
+	/* Add related symbol to the list */
+	list_add_tail(&rel_sym->list, &entry->related_symbols);
+	return 0;
+}
+
+/**
+ * symbol_relations_lookup - Look up related symbols for a parent symbol
+ */
+struct list_head *symbol_relations_lookup(struct rb_root *relations_root,
+					  struct symbol *parent_sym,
+					  uint64_t parent_iaddr)
+{
+	struct symbol_relations_entry *entry;
+
+	entry = symbol_relations_find(relations_root, parent_sym, parent_iaddr);
+	return entry ? &entry->related_symbols : NULL;
+}
+
+/**
+ * symbol_relations_destroy - Destroy and free all symbol relations
+ */
+void symbol_relations_destroy(struct rb_root *relations_root)
+{
+	struct rb_node *node;
+
+	while ((node = rb_first(relations_root))) {
+		struct symbol_relations_entry *entry;
+		struct related_symbol *rel_sym, *tmp;
+
+		entry = rb_entry(node, struct symbol_relations_entry, node);
+
+		/* Free all related symbols */
+		list_for_each_entry_safe(rel_sym, tmp, &entry->related_symbols, list) {
+			list_del(&rel_sym->list);
+			free(rel_sym);
+		}
+
+		rb_erase(node, relations_root);
+		free(entry);
+	}
+}
+
+/**
+ * c2c_he_ext_zalloc - Allocate histogram entry for symbol view
+ * @size: Size needed for hist_entry including dynamic callchain data
+ *
+ * Returns: Pointer to hist_entry within allocated c2c_hist_entry, or NULL on failure
+ */
+static void *c2c_he_ext_zalloc(size_t size)
+{
+	struct c2c_hist_entry *c2c_he;
+
+	/* Allocate structure plus space for hist_entry dynamic data
+	 * size contains the space needed for hist_entry's dynamic part (callchain)
+	 * sizeof(*c2c_he) already includes the static hist_entry size
+	 */
+	c2c_he = zalloc(size + sizeof(*c2c_he));
+	if (!c2c_he)
+		return NULL;
+
+	c2c_he->cpuset = bitmap_zalloc(c2c.cpus_cnt);
+	if (!c2c_he->cpuset)
+		goto out_free;
+
+	c2c_he->nodeset = bitmap_zalloc(c2c.nodes_cnt);
+	if (!c2c_he->nodeset)
+		goto out_free;
+
+	c2c_he->node_stats = zalloc(c2c.nodes_cnt * sizeof(*c2c_he->node_stats));
+	if (!c2c_he->node_stats)
+		goto out_free;
+
+	init_stats(&c2c_he->cstats.lcl_hitm);
+	init_stats(&c2c_he->cstats.rmt_hitm);
+	init_stats(&c2c_he->cstats.lcl_peer);
+	init_stats(&c2c_he->cstats.rmt_peer);
+	init_stats(&c2c_he->cstats.load);
+
+	return &c2c_he->he;
+
+out_free:
+	zfree(&c2c_he->nodeset);
+	zfree(&c2c_he->cpuset);
+	free(c2c_he);
+	return NULL;
+}
+
+/**
+ * c2c_he_ext_free - Free histogram entry for symbol view
  * @he: Pointer to hist_entry to free
  */
 static void c2c_he_ext_free(void *he)
 {
-	struct c2c_hist_entry_ext *c2c_he_ext;
+	struct c2c_hist_entry *c2c_he;
 
-	c2c_he_ext = container_of(he, struct c2c_hist_entry_ext, c2c_he.he);
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
 	/* Free base c2c_hist_entry */
-	if (c2c_he_ext->c2c_he.hists) {
-		hists__delete_entries(&c2c_he_ext->c2c_he.hists->hists);
-		zfree(&c2c_he_ext->c2c_he.hists);
+	if (c2c_he->hists) {
+		hists__delete_entries(&c2c_he->hists->hists);
+		zfree(&c2c_he->hists);
 	}
 
 	/* Free child entries first */
 	free_child_entries((struct hist_entry *)he);
 
 	/* Free all fields */
-	zfree(&c2c_he_ext->c2c_he.nodeset);
-	zfree(&c2c_he_ext->c2c_he.cpuset);
-	zfree(&c2c_he_ext->c2c_he.nodestr);
-	zfree(&c2c_he_ext->c2c_he.node_stats);
+	zfree(&c2c_he->nodeset);
+	zfree(&c2c_he->cpuset);
+	zfree(&c2c_he->nodestr);
+	zfree(&c2c_he->node_stats);
 
-	if (!list_empty(&c2c_he_ext->related_symbols)) {
-		struct related_symbol *rel_sym, *tmp;
-		list_for_each_entry_safe(rel_sym, tmp, &c2c_he_ext->related_symbols, list) {
-			list_del(&rel_sym->list);
-			free(rel_sym);
-		}
-	}
+	/* Note: related_symbols are now managed externally in relations_root */
 
-	/* Free the extended structure */
-	free(c2c_he_ext);
+	/* Free the structure */
+	free(c2c_he);
 }
 
 /* Entry operations for symbol view (uses extended histogram entries) */
@@ -207,8 +339,8 @@ static int
 total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		   struct hist_entry *he)
 {
-	struct c2c_hist_entry_ext *c2c_he_ext = container_of(he, struct c2c_hist_entry_ext, c2c_he.he);
-	uint64_t total = (uint64_t)c2c_he_ext->c2c_he.stats.store;
+	struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
+	uint64_t total = (uint64_t)c2c_he->stats.store;
 	int width = c2c_width(fmt, hpp, he->hists);
 	char buf[32];
 	const char *indent;
@@ -328,13 +460,29 @@ symbol_view_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 }
 
 /**
+ * calculate_symbol_cycles - Calculate total cycles for a symbol
+ */
+static uint64_t calculate_symbol_cycles(struct c2c_hist_entry *c2c_he)
+{
+	uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load, total_hitm;
+
+	cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
+	cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
+	total_hitm = (uint64_t)c2c_he->stats.rmt_hitm + c2c_he->stats.lcl_hitm;
+	other_load = (c2c_he->stats.load >= total_hitm) ? c2c_he->stats.load - total_hitm : 0;
+	cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
+
+	return cycles_rmt + cycles_lcl + cycles_load;
+}
+
+/**
  * cycles_percent_entry - Render cycles percentage column
  */
 static int
 cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		     struct hist_entry *he)
 {
-	struct c2c_hist_entry_ext *c2c_he;
+	struct c2c_hist_entry *c2c_he;
 	int width = c2c_width(fmt, hpp, he->hists);
 	uint64_t symbol_cycles;
 	uint64_t total_cycles;
@@ -344,17 +492,8 @@ cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	if (he->parent_he)
 		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
 
-	c2c_he = container_of(he, struct c2c_hist_entry_ext, c2c_he.he);
-	{
-		uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load, total_hitm;
-		cycles_rmt = avg_stats(&c2c_he->c2c_he.cstats.rmt_hitm) * c2c_he->c2c_he.stats.rmt_hitm;
-		cycles_lcl = avg_stats(&c2c_he->c2c_he.cstats.lcl_hitm) * c2c_he->c2c_he.stats.lcl_hitm;
-		/* Prevent unsigned underflow by checking before subtraction */
-		total_hitm = (uint64_t)c2c_he->c2c_he.stats.rmt_hitm + c2c_he->c2c_he.stats.lcl_hitm;
-		other_load = (c2c_he->c2c_he.stats.load >= total_hitm) ? c2c_he->c2c_he.stats.load - total_hitm : 0;
-		cycles_load = avg_stats(&c2c_he->c2c_he.cstats.load) * other_load;
-		symbol_cycles = cycles_rmt + cycles_lcl + cycles_load;
-	}
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	symbol_cycles = calculate_symbol_cycles(c2c_he);
 
 	total_cycles = get_total_cycles_all_symbols();
 	pct = total_cycles > 0 ? (double)symbol_cycles / total_cycles * 100.0 : 0.0;
@@ -369,30 +508,14 @@ static int64_t
 cycles_percent_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 		   struct hist_entry *left, struct hist_entry *right)
 {
-	struct c2c_hist_entry_ext *c2c_left = container_of(left, struct c2c_hist_entry_ext, c2c_he.he);
-	struct c2c_hist_entry_ext *c2c_right = container_of(right, struct c2c_hist_entry_ext, c2c_he.he);
+	struct c2c_hist_entry *c2c_left = container_of(left, struct c2c_hist_entry, he);
+	struct c2c_hist_entry *c2c_right = container_of(right, struct c2c_hist_entry, he);
 	uint64_t cycles_left, cycles_right;
 
-	{
-		uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load, total_hitm;
-		cycles_rmt = avg_stats(&c2c_left->c2c_he.cstats.rmt_hitm) * c2c_left->c2c_he.stats.rmt_hitm;
-		cycles_lcl = avg_stats(&c2c_left->c2c_he.cstats.lcl_hitm) * c2c_left->c2c_he.stats.lcl_hitm;
-		total_hitm = (uint64_t)c2c_left->c2c_he.stats.rmt_hitm + c2c_left->c2c_he.stats.lcl_hitm;
-		other_load = (c2c_left->c2c_he.stats.load >= total_hitm) ? c2c_left->c2c_he.stats.load - total_hitm : 0;
-		cycles_load = avg_stats(&c2c_left->c2c_he.cstats.load) * other_load;
-		cycles_left = cycles_rmt + cycles_lcl + cycles_load;
-	}
-	{
-		uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load, total_hitm;
-		cycles_rmt = avg_stats(&c2c_right->c2c_he.cstats.rmt_hitm) * c2c_right->c2c_he.stats.rmt_hitm;
-		cycles_lcl = avg_stats(&c2c_right->c2c_he.cstats.lcl_hitm) * c2c_right->c2c_he.stats.lcl_hitm;
-		total_hitm = (uint64_t)c2c_right->c2c_he.stats.rmt_hitm + c2c_right->c2c_he.stats.lcl_hitm;
-		other_load = (c2c_right->c2c_he.stats.load >= total_hitm) ? c2c_right->c2c_he.stats.load - total_hitm : 0;
-		cycles_load = avg_stats(&c2c_right->c2c_he.cstats.load) * other_load;
-		cycles_right = cycles_rmt + cycles_lcl + cycles_load;
-	}
+	cycles_left = calculate_symbol_cycles(c2c_left);
+	cycles_right = calculate_symbol_cycles(c2c_right);
 
-	return (int64_t)cycles_left - (int64_t)cycles_right;
+	return cycles_left - cycles_right;
 }
 
 /**
@@ -420,21 +543,21 @@ static int64_t
 total_stores_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 		 struct hist_entry *left, struct hist_entry *right)
 {
-	struct c2c_hist_entry_ext *c2c_left = container_of(left, struct c2c_hist_entry_ext, c2c_he.he);
-	struct c2c_hist_entry_ext *c2c_right = container_of(right, struct c2c_hist_entry_ext, c2c_he.he);
+	struct c2c_hist_entry *c2c_left = container_of(left, struct c2c_hist_entry, he);
+	struct c2c_hist_entry *c2c_right = container_of(right, struct c2c_hist_entry, he);
 
-	return (uint64_t)c2c_left->c2c_he.stats.store -
-	       (uint64_t)c2c_right->c2c_he.stats.store;
+	return (uint64_t)c2c_left->stats.store -
+	       (uint64_t)c2c_right->stats.store;
 }
 
 /**
  * struct grand_item - Grandchild entry for sorting
- * @grand_c2c: C2C histogram entry extension for the grandchild
+ * @grand_c2c: C2C histogram entry for the grandchild
  * @grand_he: Histogram entry for the grandchild
  * @stores: Store count for sorting
  */
 struct grand_item {
-	struct c2c_hist_entry_ext	*grand_c2c;
+	struct c2c_hist_entry	*grand_c2c;
 	struct hist_entry	*grand_he;
 	u64			 stores;
 };
@@ -507,7 +630,7 @@ static void c2c_add_cstats(struct compute_stats *dest, struct compute_stats *src
 /**
  * init_grandchild_hist_entry - Initialize a grandchild hist_entry for symbol view
  * @grand_he: The grandchild hist_entry to initialize
- * @grand_c2c: The corresponding c2c_hist_entry_ext
+ * @grand_c2c: The corresponding c2c_hist_entry
  * @cl_entry: Cacheline entry containing base information
  * @child_he: Parent hist_entry (the symbol child)
  * @child_access: Symbol access data for statistics
@@ -515,13 +638,12 @@ static void c2c_add_cstats(struct compute_stats *dest, struct compute_stats *src
  * Returns: 0 on success, negative value on memory allocation failure
  */
 static int init_grandchild_hist_entry(struct hist_entry *grand_he,
-				     struct c2c_hist_entry_ext *grand_c2c,
+				     struct c2c_hist_entry *grand_c2c,
 				     struct cacheline_symbol_entry *cl_entry,
 				     struct hist_entry *child_he,
 				     struct symbol_access *child_access)
 {
 	/* Basic initialization */
-	INIT_LIST_HEAD(&grand_c2c->related_symbols);
 
 	/* Copy map_symbol from cacheline entry, but clear sym to print cacheline address */
 	memcpy(&grand_he->ms, &cl_entry->he_cl->ms, sizeof(struct map_symbol));
@@ -555,14 +677,14 @@ static int init_grandchild_hist_entry(struct hist_entry *grand_he,
 	grand_he->hpp_list = &c2c_ext.symbol_hists.list;
 
 	/* Copy statistics from symbol access data */
-	memcpy(&grand_c2c->c2c_he.stats, &child_access->stats, sizeof(grand_c2c->c2c_he.stats));
-	memcpy(&grand_c2c->c2c_he.cstats, &child_access->cstats, sizeof(grand_c2c->c2c_he.cstats));
+	memcpy(&grand_c2c->stats, &child_access->stats, sizeof(grand_c2c->stats));
+	memcpy(&grand_c2c->cstats, &child_access->cstats, sizeof(grand_c2c->cstats));
 
 	/* Calculate display statistics */
-	grand_he->stat.nr_events = HITM_COUNT(&grand_c2c->c2c_he.stats) +
-				   grand_c2c->c2c_he.stats.lcl_peer + grand_c2c->c2c_he.stats.rmt_peer;
+	grand_he->stat.nr_events = HITM_COUNT(&grand_c2c->stats) +
+				   grand_c2c->stats.lcl_peer + grand_c2c->stats.rmt_peer;
 	grand_he->stat.period = grand_he->stat.nr_events;
-	grand_he->stat.weight1 = HITM_COUNT(&grand_c2c->c2c_he.stats);
+	grand_he->stat.weight1 = HITM_COUNT(&grand_c2c->stats);
 
 	/* Initialize stat_acc for callchain accumulation if needed */
 	if (symbol_conf.cumulate_callchain) {
@@ -578,10 +700,10 @@ static int init_grandchild_hist_entry(struct hist_entry *grand_he,
 /**
  * cleanup_grandchild_entry - Clean up resources for a grandchild hist_entry
  * @grand_he: The grandchild hist_entry to clean up
- * @grand_c2c: The corresponding c2c_hist_entry_ext
+ * @grand_c2c: The corresponding c2c_hist_entry
  */
 static void cleanup_grandchild_entry(struct hist_entry *grand_he,
-				     struct c2c_hist_entry_ext *grand_c2c)
+				     struct c2c_hist_entry *grand_c2c)
 {
 	if (grand_he->mem_info)
 		mem_info__put(grand_he->mem_info);
@@ -595,11 +717,11 @@ static void cleanup_grandchild_entry(struct hist_entry *grand_he,
  * @items: Array of grand_item structures
  * @items_cnt: Number of items in the array
  * @current_he: Current hist_entry being constructed (can be NULL)
- * @current_c2c: Current c2c_hist_entry_ext being constructed (can be NULL)
+ * @current_c2c: Current c2c_hist_entry being constructed (can be NULL)
  */
 static void cleanup_grandchildren_items(struct grand_item *items, int items_cnt,
 					struct hist_entry *current_he,
-					struct c2c_hist_entry_ext *current_c2c)
+					struct c2c_hist_entry *current_c2c)
 {
 	/* Clean up the current entry being constructed if provided */
 	if (current_he && current_c2c)
@@ -616,12 +738,13 @@ static void cleanup_grandchildren_items(struct grand_item *items, int items_cnt,
  * validate_and_prepare_entries - Validate and prepare for populating symbol children
  * @he: Histogram entry to validate
  *
- * Returns the c2c_hist_entry_ext if valid, NULL otherwise
+ * Returns the related symbols list if valid, NULL otherwise
  */
-static struct c2c_hist_entry_ext *validate_and_prepare_entries(struct hist_entry *he)
+static struct list_head *validate_and_prepare_entries(struct hist_entry *he)
 {
-	struct c2c_hist_entry_ext *c2c_he;
+	struct list_head *rel_list;
 	struct rb_root_cached *root;
+	uint64_t parent_iaddr;
 
 	if (!he || !he->has_children)
 		return NULL;
@@ -632,26 +755,33 @@ static struct c2c_hist_entry_ext *validate_and_prepare_entries(struct hist_entry
 	if (!RB_EMPTY_ROOT(&root->rb_root))
 		return NULL;
 
-	c2c_he = container_of(he, struct c2c_hist_entry_ext, c2c_he.he);
+	/* Get parent symbol's instruction address */
+	parent_iaddr = he->mem_info ?
+		mem_info__iaddr(he->mem_info)->addr :
+		(he->ms.sym ? he->ms.sym->start : 0);
+
+	/* Look up related symbols from relations table */
+	rel_list = symbol_relations_lookup(&c2c_ext.relations_root,
+					   he->ms.sym, parent_iaddr);
 
 	/* Ensure related_symbols list is valid */
-	if (list_empty(&c2c_he->related_symbols)) {
+	if (!rel_list || list_empty(rel_list)) {
 		he->has_children = false;  /* Reset inconsistent state */
 		return NULL;
 	}
 
-	return c2c_he;
+	return rel_list;
 }
 
 /**
  * sort_related_symbols_by_stores - Sort related symbols by stores descending
- * @c2c_he: C2C histogram entry containing related symbols
+ * @rel_list: List of related symbols
  * @num_rel_out: Output parameter for number of related symbols
  *
  * Returns allocated array of sorted related_symbol pointers, or NULL on error.
  * Caller must free the returned array.
  */
-static struct related_symbol **sort_related_symbols_by_stores(struct c2c_hist_entry_ext *c2c_he,
+static struct related_symbol **sort_related_symbols_by_stores(struct list_head *rel_list,
 							      int *num_rel_out)
 {
 	struct related_symbol *rel_sym;
@@ -659,7 +789,7 @@ static struct related_symbol **sort_related_symbols_by_stores(struct c2c_hist_en
 	int num_rel = 0, idx = 0;
 
 	/* Count related symbols and allocate array in one pass */
-	list_for_each_entry(rel_sym, &c2c_he->related_symbols, list)
+	list_for_each_entry(rel_sym, rel_list, list)
 		num_rel++;
 
 	if (num_rel == 0) {
@@ -674,7 +804,7 @@ static struct related_symbol **sort_related_symbols_by_stores(struct c2c_hist_en
 	}
 
 	/* Fill array in the same pass */
-	list_for_each_entry(rel_sym, &c2c_he->related_symbols, list)
+	list_for_each_entry(rel_sym, rel_list, list)
 		sorted[idx++] = rel_sym;
 
 	/* Sort by stats.store descending */
@@ -694,7 +824,7 @@ static struct related_symbol **sort_related_symbols_by_stores(struct c2c_hist_en
 static struct hist_entry *create_symbol_child_entry(struct hist_entry *parent_he,
 						    struct related_symbol *rel_sym)
 {
-	struct c2c_hist_entry_ext *child_c2c_he, *child_c2c;
+	struct c2c_hist_entry *child_c2c_he, *child_c2c;
 	struct hist_entry *child_he;
 
 	if (!rel_sym || !rel_sym->sym)
@@ -705,10 +835,7 @@ static struct hist_entry *create_symbol_child_entry(struct hist_entry *parent_he
 	if (!child_c2c_he)
 		return NULL;
 
-	/* Initialize the related_symbols list */
-	INIT_LIST_HEAD(&child_c2c_he->related_symbols);
-
-	child_he = &child_c2c_he->c2c_he.he;
+	child_he = &child_c2c_he->he;
 
 	/* Complete initialization - copy parent's map_symbol structure first */
 	memcpy(&child_he->ms, &parent_he->ms, sizeof(struct map_symbol));
@@ -772,13 +899,12 @@ static struct hist_entry *create_symbol_child_entry(struct hist_entry *parent_he
 	child_he->hpp_list = &c2c_ext.symbol_hists.list;
 
 	/* Copy c2c stats - this is what c2c columns use */
-	child_c2c = container_of(child_he, struct c2c_hist_entry_ext, c2c_he.he);
-	memcpy(&child_c2c->c2c_he.stats, &rel_sym->stats, sizeof(rel_sym->stats));
-	memcpy(&child_c2c->c2c_he.cstats, &rel_sym->cstats, sizeof(rel_sym->cstats));
-	INIT_LIST_HEAD(&child_c2c->related_symbols);
+	child_c2c = container_of(child_he, struct c2c_hist_entry, he);
+	memcpy(&child_c2c->stats, &rel_sym->stats, sizeof(rel_sym->stats));
+	memcpy(&child_c2c->cstats, &rel_sym->cstats, sizeof(rel_sym->cstats));
 
 	/* Build cacheline grandchildren under each related symbol child */
-	child_c2c->c2c_he.hists = NULL;
+	child_c2c->hists = NULL;
 
 	return child_he;
 }
@@ -955,7 +1081,7 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 		}
 
 		if (parent_access && child_access) {
-			struct c2c_hist_entry_ext *grand_c2c = zalloc(sizeof(*grand_c2c));
+			struct c2c_hist_entry *grand_c2c = zalloc(sizeof(*grand_c2c));
 			struct hist_entry *grand_he;
 			u64 child_stores = child_access->stats.store;
 
@@ -964,7 +1090,7 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
 				return 0;
 			}
 
-			grand_he = &grand_c2c->c2c_he.he;
+			grand_he = &grand_c2c->he;
 
 			/* Initialize grandchild hist_entry using helper function */
 			if (init_grandchild_hist_entry(grand_he, grand_c2c, cl_entry,
@@ -1031,7 +1157,7 @@ static int populate_cacheline_grandchildren(struct hist_entry *parent_he,
  */
 static void populate_symbol_children(struct hist_entry *he)
 {
-	struct c2c_hist_entry_ext *c2c_he;
+	struct list_head *rel_list;
 	struct related_symbol **sorted;
 	struct rb_root_cached *root;
 	struct rb_node **p, *parent;
@@ -1039,14 +1165,14 @@ static void populate_symbol_children(struct hist_entry *he)
 	int count = 0, num_rel, i;
 
 	/* Validate and prepare entries */
-	c2c_he = validate_and_prepare_entries(he);
-	if (!c2c_he)
+	rel_list = validate_and_prepare_entries(he);
+	if (!rel_list)
 		return;
 
 	root = &he->hroot_out;
 
 	/* Sort related symbols by stores descending */
-	sorted = sort_related_symbols_by_stores(c2c_he, &num_rel);
+	sorted = sort_related_symbols_by_stores(rel_list, &num_rel);
 	if (!sorted)
 		return;
 
@@ -1102,7 +1228,6 @@ static void build_symbol_associations(void)
 {
 	struct rb_node *nd_sym;
 	struct hist_entry *he_sym;
-	struct c2c_hist_entry_ext *c2c_he_sym;
 	int cl_idx;
 
 	/*
@@ -1187,46 +1312,55 @@ static void build_symbol_associations(void)
 						else if (he_sym->ms.sym)
 							parent_iaddr = he_sym->ms.sym->start;
 
-						if (symbol_name_equal(he_sym->ms.sym, symbols_with_hitm[i].sym) &&
-							parent_iaddr == symbols_with_hitm[i].iaddr) {
-							c2c_he_sym = container_of(he_sym, struct c2c_hist_entry_ext, c2c_he.he);
+					if (symbol_name_equal(he_sym->ms.sym, symbols_with_hitm[i].sym) &&
+						parent_iaddr == symbols_with_hitm[i].iaddr) {
+						struct list_head *rel_list;
 
-							/* Add all other symbols as related */
-							for (j = 0; j < symbol_count; j++) {
-								if (i != j) {
-									struct related_symbol *rel_sym;
-									bool exists = false;
+						/* Look up existing relations for this parent symbol */
+						rel_list = symbol_relations_lookup(&c2c_ext.relations_root,
+										   he_sym->ms.sym, parent_iaddr);
 
-									/* Check if already added (compare both sym and iaddr) */
-									list_for_each_entry(rel_sym, &c2c_he_sym->related_symbols, list) {
+						/* Add all other symbols as related */
+						for (j = 0; j < symbol_count; j++) {
+							if (i != j) {
+								struct related_symbol *rel_sym;
+								bool exists = false;
+
+								/* Check if already added (compare both sym and iaddr) */
+								if (rel_list) {
+									list_for_each_entry(rel_sym, rel_list, list) {
 										if (symbol_name_equal(rel_sym->sym, symbols_with_hitm[j].sym) &&
 											rel_sym->iaddr == symbols_with_hitm[j].iaddr) {
 											exists = true;
 											break;
 										}
 									}
+								}
 
-									if (!exists) {
-										rel_sym = zalloc(sizeof(*rel_sym));
-										if (rel_sym) {
-											rel_sym->sym = symbols_with_hitm[j].sym;
-											rel_sym->iaddr = symbols_with_hitm[j].iaddr;
-											/* zalloc already zeros memory, no need for memset */
-											list_add_tail(&rel_sym->list, &c2c_he_sym->related_symbols);
-										}
+								if (!exists) {
+									rel_sym = zalloc(sizeof(*rel_sym));
+									if (rel_sym) {
+										rel_sym->sym = symbols_with_hitm[j].sym;
+										rel_sym->iaddr = symbols_with_hitm[j].iaddr;
+										/* Add to relations table */
+										symbol_relations_add(&c2c_ext.relations_root,
+												     he_sym->ms.sym, parent_iaddr, rel_sym);
 									}
 								}
 							}
-
-							/* Mark as having children */
-							if (!list_empty(&c2c_he_sym->related_symbols)) {
-								he_sym->has_children = true;
-								he_sym->unfolded = false;
-								he_sym->leaf = false;
-							}
-
-							break;
 						}
+
+						/* Mark as having children if relations exist */
+						rel_list = symbol_relations_lookup(&c2c_ext.relations_root,
+										   he_sym->ms.sym, parent_iaddr);
+						if (rel_list && !list_empty(rel_list)) {
+							he_sym->has_children = true;
+							he_sym->unfolded = false;
+							he_sym->leaf = false;
+						}
+
+						break;
+					}
 					}
 					nd_sym = rb_next(nd_sym);
 				}
@@ -1240,17 +1374,26 @@ static void build_symbol_associations(void)
 	nd_sym = rb_first_cached(&c2c_ext.symbol_hists.hists.entries);
 	while (nd_sym) {
 		struct related_symbol *rel_sym;
+		struct list_head *rel_list;
+		uint64_t parent_iaddr;
 
 		he_sym = rb_entry(nd_sym, struct hist_entry, rb_node);
-		c2c_he_sym = container_of(he_sym, struct c2c_hist_entry_ext, c2c_he.he);
+
+		/* Precompute parent's iaddr once */
+		parent_iaddr = he_sym->mem_info ?
+			mem_info__iaddr(he_sym->mem_info)->addr :
+			(he_sym->ms.sym ? he_sym->ms.sym->start : 0);
+
+		/* Look up related symbols from relations table */
+		rel_list = symbol_relations_lookup(&c2c_ext.relations_root,
+						   he_sym->ms.sym, parent_iaddr);
+		if (!rel_list) {
+			nd_sym = rb_next(nd_sym);
+			continue;
+		}
 
 		/* For each related symbol, aggregate stats from shared cachelines using cached index */
-		list_for_each_entry(rel_sym, &c2c_he_sym->related_symbols, list) {
-			/* Precompute parent's iaddr once */
-			uint64_t parent_iaddr = he_sym->mem_info ?
-				mem_info__iaddr(he_sym->mem_info)->addr :
-				(he_sym->ms.sym ? he_sym->ms.sym->start : 0);
-
+		list_for_each_entry(rel_sym, rel_list, list) {
 			/* Use cached index instead of nested rb_next loops */
 			for (cl_idx = 0; cl_idx < c2c_ext.cacheline_index_size; cl_idx++) {
 				struct cacheline_symbol_entry *cl_entry = &c2c_ext.cacheline_index[cl_idx];
@@ -1309,15 +1452,15 @@ static uint64_t get_total_cycles_all_symbols(void)
 	nd = rb_first_cached(&c2c_ext.symbol_hists.hists.entries);
 	while (nd) {
 		struct hist_entry *he = rb_entry(nd, struct hist_entry, rb_node);
-		struct c2c_hist_entry_ext *c2c_he = container_of(he, struct c2c_hist_entry_ext, c2c_he.he);
+		struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
 		uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load, total_hitm, symbol_cycles;
 
-		cycles_rmt = avg_stats(&c2c_he->c2c_he.cstats.rmt_hitm) * c2c_he->c2c_he.stats.rmt_hitm;
-		cycles_lcl = avg_stats(&c2c_he->c2c_he.cstats.lcl_hitm) * c2c_he->c2c_he.stats.lcl_hitm;
+		cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
+		cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
 		/* Prevent unsigned underflow by checking before subtraction */
-		total_hitm = (uint64_t)c2c_he->c2c_he.stats.rmt_hitm + c2c_he->c2c_he.stats.lcl_hitm;
-		other_load = (c2c_he->c2c_he.stats.load >= total_hitm) ? c2c_he->c2c_he.stats.load - total_hitm : 0;
-		cycles_load = avg_stats(&c2c_he->c2c_he.cstats.load) * other_load;
+		total_hitm = (uint64_t)c2c_he->stats.rmt_hitm + c2c_he->stats.lcl_hitm;
+		other_load = (c2c_he->stats.load >= total_hitm) ? c2c_he->stats.load - total_hitm : 0;
+		cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
 
 		symbol_cycles = cycles_rmt + cycles_lcl + cycles_load;
 		total_cycles += symbol_cycles;
@@ -1339,7 +1482,7 @@ static int build_symbol_hists(void)
 {
 	struct rb_node *next;
 	struct hist_entry *he_sym;
-	struct c2c_hist_entry_ext *c2c_he_sym;
+	struct c2c_hist_entry *c2c_he_sym;
 	struct addr_location al;
 	struct perf_sample sample = {};
 	struct thread *synthetic_thread = NULL;
@@ -1353,6 +1496,10 @@ static int build_symbol_hists(void)
 
 	/* Clean up previous symbol hists entries before initializing */
 	hists__delete_entries(&c2c_ext.symbol_hists.hists);
+
+	/* Destroy old relations table and reinitialize */
+	symbol_relations_destroy(&c2c_ext.relations_root);
+	symbol_relations_init(&c2c_ext.relations_root);
 
 	/* Initialize symbol hists with sort by iaddr (code address) and symbol_view */
 	ret = c2c_symbol_hists__init(&c2c_ext.symbol_hists, "iaddr_symbol,symbol_view", 2, NULL);
@@ -1436,11 +1583,11 @@ static int build_symbol_hists(void)
 					mem_info__put(mi_display);
 
 				if (he_sym) {
-					c2c_he_sym = container_of(he_sym, struct c2c_hist_entry_ext, c2c_he.he);
+					c2c_he_sym = container_of(he_sym, struct c2c_hist_entry, he);
 
 					/* Accumulate stats from cached symbol_access across cachelines */
-					c2c_add_stats(&c2c_he_sym->c2c_he.stats, &sa->stats);
-					c2c_add_cstats(&c2c_he_sym->c2c_he.cstats, &sa->cstats);
+					c2c_add_stats(&c2c_he_sym->stats, &sa->stats);
+					c2c_add_cstats(&c2c_he_sym->cstats, &sa->cstats);
 					c2c_add_stats(&c2c_ext.symbol_hists.stats, &sa->stats);
 
 					hists__inc_nr_samples(&c2c_ext.symbol_hists.hists, he_sym->filtered);
@@ -1663,7 +1810,7 @@ static void free_child_entries(struct hist_entry *parent_he)
 {
 	struct rb_node *nd;
 	struct hist_entry *child_he;
-	struct c2c_hist_entry_ext *child_c2c_he;
+	struct c2c_hist_entry *child_c2c_he;
 
 	if (RB_EMPTY_ROOT(&parent_he->hroot_out.rb_root))
 		return;
@@ -1673,7 +1820,7 @@ static void free_child_entries(struct hist_entry *parent_he)
 		struct rb_node *next = rb_next(nd);
 
 		child_he = rb_entry(nd, struct hist_entry, rb_node);
-		child_c2c_he = container_of(child_he, struct c2c_hist_entry_ext, c2c_he.he);
+		child_c2c_he = container_of(child_he, struct c2c_hist_entry, he);
 
 		if (child_he->stat_acc)
 			zfree(&child_he->stat_acc);
@@ -1682,24 +1829,17 @@ static void free_child_entries(struct hist_entry *parent_he)
 			mem_info__put(child_he->mem_info);
 
 		/* Free child's hists */
-		if (child_c2c_he->c2c_he.hists) {
-			hists__delete_entries(&child_c2c_he->c2c_he.hists->hists);
-			zfree(&child_c2c_he->c2c_he.hists);
+		if (child_c2c_he->hists) {
+			hists__delete_entries(&child_c2c_he->hists->hists);
+			zfree(&child_c2c_he->hists);
 		}
 
-		/* Free related symbols list */
-		{
-			struct related_symbol *rel_sym, *tmp;
-			list_for_each_entry_safe(rel_sym, tmp, &child_c2c_he->related_symbols, list) {
-				list_del(&rel_sym->list);
-				free(rel_sym);
-			}
-		}
+		/* Note: related_symbols are now managed externally in relations_root */
 
-		zfree(&child_c2c_he->c2c_he.cpuset);
-		zfree(&child_c2c_he->c2c_he.nodeset);
-		zfree(&child_c2c_he->c2c_he.nodestr);
-		zfree(&child_c2c_he->c2c_he.node_stats);
+		zfree(&child_c2c_he->cpuset);
+		zfree(&child_c2c_he->nodeset);
+		zfree(&child_c2c_he->nodestr);
+		zfree(&child_c2c_he->node_stats);
 
 		/* Recursively free grandchildren in child_he->hroot_out */
 		free_child_entries(child_he);
@@ -1839,6 +1979,7 @@ struct c2c_dimension dim_iaddr_symbol = {
 
 struct c2c_dimension dim_symbol_view = {
 	.name		= "symbol_view",
+	.cmp		= empty_cmp,
 	.entry		= symbol_view_entry,
 	.width		= SYMBOL_WIDTH,
 };
@@ -1976,12 +2117,14 @@ static int symbol_hpp_list__parse(struct perf_hpp_list *hpp_list,
 {
 	char *output = output_ ? strdup(output_) : NULL;
 	char *sort   = sort_   ? strdup(sort_) : NULL;
-	int ret;
+	int ret = 0;
 
 #define PARSE_LIST(_list, _fn)							\
 	do {									\
 		char *tmp, *tok;						\
-		ret = 0;							\
+										\
+		if (ret)							\
+			break;							\
 										\
 		if (!_list)							\
 			break;							\
