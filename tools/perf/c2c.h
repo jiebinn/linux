@@ -41,65 +41,57 @@ struct c2c_hist_entry {
 /**
  * struct related_symbol - Symbol that shares a cacheline with another symbol
  * @list: List node for linking in c2c_hist_entry.related_symbols
- * @sym: Pointer to the symbol
  * @iaddr: Code address (instruction address)
  * @stats: Aggregated C2C stats for this symbol's accesses
  * @cstats: Computed statistics for this symbol
  */
 struct related_symbol {
-	struct list_head	 list;
-	struct symbol		*sym;
 	uint64_t		 iaddr;
+	struct list_head	 list;
 	struct c2c_stats	 stats;
 	struct compute_stats	 cstats;
 };
 
 /**
  * struct symbol_access - Record of a symbol accessing a cacheline
- * @sym: Pointer to the accessing symbol
+ * @list: List node for linking in cacheline_symbol_entry.symbol_accesses
  * @iaddr: Instruction address of the access
  * @map: Map containing the symbol
  * @maps: Maps container
  * @stats: C2C statistics for this access
  * @cstats: Computed statistics for this access
- * @next: Next symbol access in the linked list
  */
 struct symbol_access {
-	struct symbol		*sym;
 	uint64_t		 iaddr;
 	struct map		*map;
 	struct maps		*maps;
+	struct list_head	 list;
 	struct c2c_stats	 stats;
 	struct compute_stats	 cstats;
-	struct symbol_access	*next;
 };
 
 /**
  * struct cacheline_symbol_entry - Index entry mapping cacheline to accessing symbols
- * @he_cl: Histogram entry for this cacheline
- * @c2c_he_cl: C2C histogram entry for this cacheline
+ * @c2c_he_cl: C2C histogram entry for this cacheline (contains hist_entry via ->he)
  * @symbol_accesses: Linked list of symbols that access this cacheline
  */
 struct cacheline_symbol_entry {
-	struct hist_entry	*he_cl;
+	struct list_head	symbol_accesses;
 	struct c2c_hist_entry	*c2c_he_cl;
-	struct symbol_access	*symbol_accesses;
 };
 
 /**
  * struct symbol_relations_entry - Entry in the symbol relations lookup table
  * @node: RB-tree node for symbol lookup
- * @parent_sym: Parent symbol
  * @parent_iaddr: Parent symbol's instruction address
  * @related_symbols: List of related symbols that share cachelines with parent
  *
- * This structure maps a parent symbol to its related symbols, enabling
- * efficient lookup without embedding the relationship data in hist_entry.
+ * This structure maps a parent symbol (identified by iaddr) to its related symbols,
+ * enabling efficient lookup without embedding the relationship data in hist_entry.
  */
 struct symbol_relations_entry {
-	struct rb_node		 node;
-	struct symbol		*parent_sym;
 	uint64_t		 parent_iaddr;
+	struct rb_node		 node;
 	struct list_head	 related_symbols;
 };
 
@@ -226,26 +218,23 @@ void symbol_relations_destroy(struct rb_root *relations_root);
 /**
  * symbol_relations_add - Add a related symbol to the relations table
  * @relations_root: RB-tree root for symbol relations
- * @parent_sym: Parent symbol
  * @parent_iaddr: Parent symbol's instruction address
  * @rel_sym: Related symbol to add
  *
  * Returns: 0 on success, negative error code on failure
  */
 int symbol_relations_add(struct rb_root *relations_root,
-			 struct symbol *parent_sym, uint64_t parent_iaddr,
+			 uint64_t parent_iaddr,
 			 struct related_symbol *rel_sym);
 
 /**
- * symbol_relations_lookup - Look up related symbols for a parent symbol
+ * symbol_relations_lookup - Look up related symbols for a parent iaddr
  * @relations_root: RB-tree root for symbol relations
- * @parent_sym: Parent symbol to lookup
  * @parent_iaddr: Parent symbol's instruction address
  *
  * Returns: List of related symbols, or NULL if not found
  */
 struct list_head *symbol_relations_lookup(struct rb_root *relations_root,
-					  struct symbol *parent_sym,
 					  uint64_t parent_iaddr);
 
 #endif /* _PERF_C2C_H_ */
