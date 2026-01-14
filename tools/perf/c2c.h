@@ -31,20 +31,7 @@ struct c2c_hist_entry {
 	bool			 paddr_zero;
 	char			*nodestr;
 
-	/**
-	 * _symbol_accessed_cachelines - PRIVATE: Symbol view internal field
-	 *
-	 * INTERNAL USE ONLY - Symbol view (c2c-symbol.c):
-	 *   - Stores list of cacheline_ref nodes linking to accessed cachelines
-	 *   - Each node points to a cacheline from main histogram (c2c.hists)
-	 *
-	 * Cacheline view (builtin-c2c.c):
-	 *   - This field MUST remain empty/unused
-	 *   - Accessing this field from cacheline view is a bug
-	 *
-	 * The underscore prefix indicates this is a private field that should
-	 * only be accessed by symbol view implementation code.
-	 */
+	/* Symbol view: list of accessed cachelines (references only) */
 	struct list_head	 _symbol_accessed_cachelines;
 
 	/*
@@ -54,15 +41,7 @@ struct c2c_hist_entry {
 	struct hist_entry	he;
 };
 
-/**
- * struct symbol_cacheline_ref - Symbol's reference to an accessed cacheline
- * @list: List node for linking in c2c_hist_entry._symbol_accessed_cachelines
- * @cacheline: Pointer to the accessed cacheline from main histogram (c2c.hists)
- *
- * Represents a symbol's access to a specific cacheline. Each symbol entry in
- * the symbol view maintains a list of these references to track all cachelines
- * it accesses, enabling efficient traversal without data duplication.
- */
+/** Reference to a cacheline accessed by a symbol (avoids data duplication) */
 struct symbol_cacheline_ref {
 	struct list_head	 list;
 	struct c2c_hist_entry	*cacheline;
