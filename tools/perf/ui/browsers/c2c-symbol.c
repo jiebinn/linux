@@ -92,6 +92,19 @@ static inline bool symbol_name_equal(struct symbol *a, struct symbol *b)
 	return a && b && strcmp(a->name, b->name) == 0;
 }
 
+/**
+ * get_hist_entry_iaddr - Get instruction address from histogram entry
+ * @he: Histogram entry
+ *
+ * Returns: Instruction address from mem_info if available, otherwise symbol start
+ */
+static inline uint64_t get_hist_entry_iaddr(struct hist_entry *he)
+{
+	if (he->mem_info)
+		return mem_info__iaddr(he->mem_info)->addr;
+	return he->ms.sym ? he->ms.sym->start : 0;
+}
+
 #define SYMBOL_WIDTH 30
 #define C2C_HEADER_MAX 2
 
@@ -129,9 +142,11 @@ static int c2c_symbol_hists__init(struct c2c_hists *hists, const char *sort,
 static int c2c_symbol_hists__reinit(struct c2c_hists *c2c_hists,
 				   const char *output, const char *sort,
 				   struct perf_env *env);
-static void free_child_entries(struct hist_entry *parent_he);
-static void step3_insert_child_into_tree(struct rb_root_cached *tree,
-					 struct hist_entry *child_he);
+static void free_hierarchy_entries(struct hist_entry *he);
+static void insert_sharing_symbol_entry_sorted(struct rb_root_cached *tree,
+					       struct hist_entry *sharing_he);
+static void add_cacheline_ref_to_symbol(struct c2c_hist_entry *c2c_he,
+					struct c2c_hist_entry *cacheline_he);
 
 /**
  * c2c_he_ext_zalloc - Allocate histogram entry for symbol view
@@ -199,7 +214,7 @@ static void c2c_he_ext_free(void *he)
 	}
 
 	/* Free child entries first */
-	free_child_entries((struct hist_entry *)he);
+	free_hierarchy_entries((struct hist_entry *)he);
 
 	/* Free symbol_cacheline_ref entries in _symbol_accessed_cachelines list */
 	list_for_each_entry_safe(ref, tmp, &c2c_he->_symbol_accessed_cachelines, list) {
@@ -483,15 +498,20 @@ static void c2c_add_cstats(struct compute_stats *dest, struct compute_stats *src
 }
 
 /**
- * step4_check_child_accesses_cacheline - Check if child accesses a cacheline
+ * aggregate_symbol_cacheline_stats - Aggregate stats for a symbol on a cacheline
+ * @cacheline_he: Cacheline histogram entry containing detail entries
+ * @symbol_iaddr: Instruction address of the symbol to match
+ * @sym: Symbol to match
+ * @out_stats: Output C2C statistics
+ * @out_cstats: Output compute statistics
  *
- * Returns aggregated stats if child accesses the cacheline, NULL otherwise.
+ * Returns: true if matching entries found, false otherwise
  */
-static bool step4_aggregate_child_cacheline_stats(struct c2c_hist_entry *cacheline_he,
-						   uint64_t child_iaddr,
-						   struct symbol *child_sym,
-						   struct c2c_stats *out_stats,
-						   struct compute_stats *out_cstats)
+static bool aggregate_symbol_cacheline_stats(struct c2c_hist_entry *cacheline_he,
+					     uint64_t symbol_iaddr,
+					     struct symbol *sym,
+					     struct c2c_stats *out_stats,
+					     struct compute_stats *out_cstats)
 {
 	struct rb_node *nd;
 	bool found = false;
@@ -504,25 +524,20 @@ static bool step4_aggregate_child_cacheline_stats(struct c2c_hist_entry *cacheli
 
 	nd = rb_first_cached(&cacheline_he->hists->hists.entries);
 	while (nd) {
-		struct hist_entry *he_detail = rb_entry(nd, struct hist_entry, rb_node);
-		struct c2c_hist_entry *c2c_detail;
-		uint64_t detail_iaddr;
+		struct hist_entry *detail_he = rb_entry(nd, struct hist_entry, rb_node);
+		struct c2c_hist_entry *detail_c2c;
 
-		if (!he_detail->ms.sym || he_detail->filtered) {
+		if (!detail_he->ms.sym || detail_he->filtered) {
 			nd = rb_next(nd);
 			continue;
 		}
 
-		detail_iaddr = he_detail->mem_info ?
-			mem_info__iaddr(he_detail->mem_info)->addr :
-			he_detail->ms.sym->start;
-
-		if (detail_iaddr == child_iaddr && symbol_name_equal(child_sym, he_detail->ms.sym)) {
-			/* Aggregate stats from all matching entries */
+		if (get_hist_entry_iaddr(detail_he) == symbol_iaddr &&
+		    symbol_name_equal(sym, detail_he->ms.sym)) {
 			found = true;
-			c2c_detail = container_of(he_detail, struct c2c_hist_entry, he);
-			c2c_add_stats(out_stats, &c2c_detail->stats);
-			c2c_add_cstats(out_cstats, &c2c_detail->cstats);
+			detail_c2c = container_of(detail_he, struct c2c_hist_entry, he);
+			c2c_add_stats(out_stats, &detail_c2c->stats);
+			c2c_add_cstats(out_cstats, &detail_c2c->cstats);
 		}
 
 		nd = rb_next(nd);
@@ -532,298 +547,286 @@ static bool step4_aggregate_child_cacheline_stats(struct c2c_hist_entry *cacheli
 }
 
 /**
- * step4_create_cacheline_grandchild - Create a grandchild entry for a shared cacheline
+ * create_cacheline_detail_entry - Create a cacheline detail entry under sharing symbol
+ * @sharing_he: Parent sharing symbol histogram entry
+ * @cacheline_src_he: Source cacheline histogram entry for address info
+ * @stats: C2C statistics for this cacheline access
+ * @cstats: Compute statistics for this cacheline access
+ * @out_c2c_he: Output pointer to created c2c_hist_entry
  *
- * Creates a grandchild entry representing a specific cacheline that is shared
- * between the parent symbol and the child symbol.
+ * Creates a leaf entry representing a specific cacheline that is shared
+ * between the primary symbol and the sharing symbol.
+ *
+ * Returns: Pointer to created hist_entry, or NULL on failure
  */
 static struct hist_entry *
-step4_create_cacheline_grandchild(struct hist_entry *child_he,
-				  struct c2c_hist_entry *cacheline_he,
-				  struct c2c_stats *stats,
-				  struct compute_stats *cstats,
-				  struct c2c_hist_entry **out_c2c_he)
+create_cacheline_detail_entry(struct hist_entry *sharing_he,
+			      struct c2c_hist_entry *cacheline_src_he,
+			      struct c2c_stats *stats,
+			      struct compute_stats *cstats,
+			      struct c2c_hist_entry **out_c2c_he)
 {
-	struct c2c_hist_entry *grand_c2c;
-	struct hist_entry *grand_he;
+	struct c2c_hist_entry *cacheline_c2c;
+	struct hist_entry *cacheline_he;
 
-	grand_c2c = zalloc(sizeof(*grand_c2c));
-	if (!grand_c2c)
+	cacheline_c2c = zalloc(sizeof(*cacheline_c2c));
+	if (!cacheline_c2c)
 		return NULL;
 
-	grand_he = &grand_c2c->he;
+	cacheline_he = &cacheline_c2c->he;
 
-	/* Copy base info from cacheline entry */
-	memcpy(&grand_he->ms, &cacheline_he->he.ms, sizeof(struct map_symbol));
+	/* Copy base info from source cacheline entry */
+	memcpy(&cacheline_he->ms, &cacheline_src_he->he.ms, sizeof(struct map_symbol));
 
-	/* Clone mem_info from cacheline to get the data address */
-	if (cacheline_he->he.mem_info) {
-		grand_he->mem_info = mem_info__clone(cacheline_he->he.mem_info);
-	}
+	/* Clone mem_info from source to get the data address */
+	if (cacheline_src_he->he.mem_info)
+		cacheline_he->mem_info = mem_info__clone(cacheline_src_he->he.mem_info);
 
-	/* Copy basic attributes from cacheline */
-	grand_he->thread = cacheline_he->he.thread;
-	grand_he->cpumode = cacheline_he->he.cpumode;
-	grand_he->cpu = cacheline_he->he.cpu;
-	grand_he->socket = cacheline_he->he.socket;
+	/* Copy basic attributes from source cacheline */
+	cacheline_he->thread = cacheline_src_he->he.thread;
+	cacheline_he->cpumode = cacheline_src_he->he.cpumode;
+	cacheline_he->cpu = cacheline_src_he->he.cpu;
+	cacheline_he->socket = cacheline_src_he->he.socket;
 
 	/* Set hierarchy info */
-	grand_he->parent_he = child_he;
-	grand_he->depth = child_he->depth + 1;
-	grand_he->leaf = true; /* Cachelines are leaf nodes */
-	grand_he->hists = &c2c_ext.symbol_hists.hists;
-	grand_he->filtered = false;
-	grand_he->unfolded = false;
-	grand_he->has_children = false;
-	grand_he->has_no_entry = false;
-	grand_he->nr_rows = 0;
-	grand_he->row_offset = 0;
+	cacheline_he->parent_he = sharing_he;
+	cacheline_he->depth = sharing_he->depth + 1;
+	cacheline_he->leaf = true; /* Cachelines are leaf nodes */
+	cacheline_he->hists = &c2c_ext.symbol_hists.hists;
+	cacheline_he->filtered = false;
+	cacheline_he->unfolded = false;
+	cacheline_he->has_children = false;
+	cacheline_he->has_no_entry = false;
+	cacheline_he->nr_rows = 0;
+	cacheline_he->row_offset = 0;
 
 	/* Set statistics */
-	memset(&grand_he->stat, 0, sizeof(grand_he->stat));
-	grand_he->stat.nr_events = HITM_COUNT(stats) + stats->rmt_peer + stats->lcl_peer;
-	grand_he->stat.period = grand_he->stat.nr_events;
-	grand_he->stat.weight1 = HITM_COUNT(stats);
+	memset(&cacheline_he->stat, 0, sizeof(cacheline_he->stat));
+	cacheline_he->stat.nr_events = HITM_COUNT(stats) + stats->rmt_peer + stats->lcl_peer;
+	cacheline_he->stat.period = cacheline_he->stat.nr_events;
+	cacheline_he->stat.weight1 = HITM_COUNT(stats);
 
 	/* Allocate stat_acc if needed */
 	if (symbol_conf.cumulate_callchain) {
-		grand_he->stat_acc = calloc(1, sizeof(struct he_stat));
-		if (grand_he->stat_acc)
-			memcpy(grand_he->stat_acc, &grand_he->stat, sizeof(struct he_stat));
+		cacheline_he->stat_acc = calloc(1, sizeof(struct he_stat));
+		if (cacheline_he->stat_acc)
+			memcpy(cacheline_he->stat_acc, &cacheline_he->stat, sizeof(struct he_stat));
 	}
 
 	/* Initialize rb-tree and list structures */
-	grand_he->hroot_in = RB_ROOT_CACHED;
-	grand_he->hroot_out = RB_ROOT_CACHED;
-	INIT_LIST_HEAD(&grand_he->pairs.node);
-	grand_he->hpp_list = &c2c_ext.symbol_hists.list;
+	cacheline_he->hroot_in = RB_ROOT_CACHED;
+	cacheline_he->hroot_out = RB_ROOT_CACHED;
+	INIT_LIST_HEAD(&cacheline_he->pairs.node);
+	cacheline_he->hpp_list = &c2c_ext.symbol_hists.list;
 
 	/* Copy C2C stats and compute stats */
-	memcpy(&grand_c2c->stats, stats, sizeof(grand_c2c->stats));
-	memcpy(&grand_c2c->cstats, cstats, sizeof(grand_c2c->cstats));
+	memcpy(&cacheline_c2c->stats, stats, sizeof(cacheline_c2c->stats));
+	memcpy(&cacheline_c2c->cstats, cstats, sizeof(cacheline_c2c->cstats));
 
-	*out_c2c_he = grand_c2c;
-	return grand_he;
+	*out_c2c_he = cacheline_c2c;
+	return cacheline_he;
 }
 
 /**
- * step4_insert_grandchild_sorted - Insert grandchild into child's tree sorted by stores
+ * insert_cacheline_entry_sorted - Insert cacheline entry sorted by stores count
+ * @tree: RB-tree to insert into
+ * @cacheline_he: Cacheline histogram entry to insert
  */
-static void step4_insert_grandchild_sorted(struct rb_root_cached *tree,
-					   struct hist_entry *grand_he)
+static void insert_cacheline_entry_sorted(struct rb_root_cached *tree,
+					  struct hist_entry *cacheline_he)
 {
 	struct rb_node **p = &tree->rb_root.rb_node;
 	struct rb_node *parent = NULL;
-	struct c2c_hist_entry *grand_c2c = container_of(grand_he, struct c2c_hist_entry, he);
+	struct c2c_hist_entry *cacheline_c2c = container_of(cacheline_he, struct c2c_hist_entry, he);
 	bool leftmost = true;
 
 	while (*p != NULL) {
-		struct hist_entry *entry = rb_entry(*p, struct hist_entry, rb_node);
-		struct c2c_hist_entry *entry_c2c = container_of(entry, struct c2c_hist_entry, he);
+		struct hist_entry *iter = rb_entry(*p, struct hist_entry, rb_node);
+		struct c2c_hist_entry *iter_c2c = container_of(iter, struct c2c_hist_entry, he);
 
 		parent = *p;
-		if (grand_c2c->stats.store > entry_c2c->stats.store) {
+		if (cacheline_c2c->stats.store > iter_c2c->stats.store)
 			p = &parent->rb_left;
-		} else {
+		else {
 			p = &parent->rb_right;
 			leftmost = false;
 		}
 	}
 
-	rb_link_node(&grand_he->rb_node, parent, p);
-	rb_insert_color_cached(&grand_he->rb_node, tree, leftmost);
+	rb_link_node(&cacheline_he->rb_node, parent, p);
+	rb_insert_color_cached(&cacheline_he->rb_node, tree, leftmost);
 }
 
 /**
- * step3_create_child_entry_from_detail - Create a child entry directly from cacheline detail
+ * create_sharing_symbol_entry - Create a sharing symbol entry from detail
+ * @primary_he: Primary symbol histogram entry (parent)
+ * @detail_he: Source detail entry containing symbol info
+ * @stats: C2C statistics
+ * @cstats: Compute statistics
+ * @out_c2c_he: Output pointer to created c2c_hist_entry
  *
- * Creates a child entry for a symbol found in cacheline detail entries,
- * even if that symbol is not in the top-level symbol list.
+ * Creates an entry for a symbol that shares cachelines with the primary symbol.
+ *
+ * Returns: Pointer to created hist_entry, or NULL on failure
  */
 static struct hist_entry *
-step3_create_child_entry_from_detail(struct hist_entry *parent_he,
-				     struct hist_entry *detail_he,
-				     struct c2c_stats *stats,
-				     struct compute_stats *cstats,
-				     struct c2c_hist_entry **out_c2c_he)
+create_sharing_symbol_entry(struct hist_entry *primary_he,
+			    struct hist_entry *detail_he,
+			    struct c2c_stats *stats,
+			    struct compute_stats *cstats,
+			    struct c2c_hist_entry **out_c2c_he)
 {
-	struct c2c_hist_entry *child_c2c_he;
-	struct hist_entry *child_he;
-	uint64_t child_iaddr;
+	struct c2c_hist_entry *sharing_c2c;
+	struct hist_entry *sharing_he;
+	uint64_t sharing_iaddr;
 
-	child_iaddr = detail_he->mem_info ?
-		mem_info__iaddr(detail_he->mem_info)->addr :
-		(detail_he->ms.sym ? detail_he->ms.sym->start : 0);
+	sharing_iaddr = get_hist_entry_iaddr(detail_he);
 
-	child_c2c_he = zalloc(sizeof(*child_c2c_he));
-	if (!child_c2c_he)
+	sharing_c2c = zalloc(sizeof(*sharing_c2c));
+	if (!sharing_c2c)
 		return NULL;
 
-	child_he = &child_c2c_he->he;
+	sharing_he = &sharing_c2c->he;
 
 	/* Copy base info from detail entry */
-	memcpy(&child_he->ms, &detail_he->ms, sizeof(struct map_symbol));
+	memcpy(&sharing_he->ms, &detail_he->ms, sizeof(struct map_symbol));
 
-	/* Clone mem_info with child's instruction address */
+	/* Clone mem_info with sharing symbol's instruction address */
 	if (detail_he->mem_info) {
-		child_he->mem_info = mem_info__clone(detail_he->mem_info);
-		if (child_he->mem_info)
-			mem_info__iaddr(child_he->mem_info)->addr = child_iaddr;
+		sharing_he->mem_info = mem_info__clone(detail_he->mem_info);
+		if (sharing_he->mem_info)
+			mem_info__iaddr(sharing_he->mem_info)->addr = sharing_iaddr;
 	}
 
 	/* Copy basic attributes */
-	child_he->thread = detail_he->thread;
-	child_he->cpumode = detail_he->cpumode;
-	child_he->cpu = detail_he->cpu;
-	child_he->socket = detail_he->socket;
+	sharing_he->thread = detail_he->thread;
+	sharing_he->cpumode = detail_he->cpumode;
+	sharing_he->cpu = detail_he->cpu;
+	sharing_he->socket = detail_he->socket;
 
 	/* Set hierarchy info */
-	child_he->parent_he = parent_he;
-	child_he->depth = parent_he->depth + 1;
-	child_he->leaf = false; /* May have grandchildren (cachelines) */
-	child_he->hists = &c2c_ext.symbol_hists.hists;
-	child_he->filtered = false;
-	child_he->unfolded = false;
-	child_he->has_children = false; /* Will be set when grandchildren added */
-	child_he->has_no_entry = false;
-	child_he->nr_rows = 0;
-	child_he->row_offset = 0;
+	sharing_he->parent_he = primary_he;
+	sharing_he->depth = primary_he->depth + 1;
+	sharing_he->leaf = false; /* May have cacheline children */
+	sharing_he->hists = &c2c_ext.symbol_hists.hists;
+	sharing_he->filtered = false;
+	sharing_he->unfolded = false;
+	sharing_he->has_children = false; /* Will be set when cacheline entries added */
+	sharing_he->has_no_entry = false;
+	sharing_he->nr_rows = 0;
+	sharing_he->row_offset = 0;
 
 	/* Set statistics from aggregated stats */
-	memset(&child_he->stat, 0, sizeof(child_he->stat));
-	child_he->stat.nr_events = HITM_COUNT(stats) + stats->rmt_peer + stats->lcl_peer;
-	child_he->stat.period = child_he->stat.nr_events;
-	child_he->stat.weight1 = HITM_COUNT(stats);
+	memset(&sharing_he->stat, 0, sizeof(sharing_he->stat));
+	sharing_he->stat.nr_events = HITM_COUNT(stats) + stats->rmt_peer + stats->lcl_peer;
+	sharing_he->stat.period = sharing_he->stat.nr_events;
+	sharing_he->stat.weight1 = HITM_COUNT(stats);
 
 	/* Allocate stat_acc if needed */
 	if (symbol_conf.cumulate_callchain) {
-		child_he->stat_acc = calloc(1, sizeof(struct he_stat));
-		if (child_he->stat_acc)
-			memcpy(child_he->stat_acc, &child_he->stat, sizeof(struct he_stat));
+		sharing_he->stat_acc = calloc(1, sizeof(struct he_stat));
+		if (sharing_he->stat_acc)
+			memcpy(sharing_he->stat_acc, &sharing_he->stat, sizeof(struct he_stat));
 	}
 
 	/* Initialize rb-tree and list structures */
-	child_he->hroot_in = RB_ROOT_CACHED;
-	child_he->hroot_out = RB_ROOT_CACHED;
-	INIT_LIST_HEAD(&child_he->pairs.node);
-	child_he->hpp_list = &c2c_ext.symbol_hists.list;
+	sharing_he->hroot_in = RB_ROOT_CACHED;
+	sharing_he->hroot_out = RB_ROOT_CACHED;
+	INIT_LIST_HEAD(&sharing_he->pairs.node);
+	sharing_he->hpp_list = &c2c_ext.symbol_hists.list;
 
 	/* Copy C2C stats */
-	memcpy(&child_c2c_he->stats, stats, sizeof(child_c2c_he->stats));
-	memcpy(&child_c2c_he->cstats, cstats, sizeof(child_c2c_he->cstats));
+	memcpy(&sharing_c2c->stats, stats, sizeof(sharing_c2c->stats));
+	memcpy(&sharing_c2c->cstats, cstats, sizeof(sharing_c2c->cstats));
 
-	*out_c2c_he = child_c2c_he;
-	return child_he;
+	*out_c2c_he = sharing_c2c;
+	return sharing_he;
 }
 
 /**
- * step3_build_children_from_cachelines - Build children directly from cacheline details
+ * build_sharing_symbols_from_cachelines - Build sharing symbol entries from cacheline details
+ * @primary_he: Primary symbol histogram entry
  *
- * For a parent symbol, find all other symbols that share its cachelines by
- * directly scanning the cacheline detail entries. This catches symbols that
- * may not be in the top-level symbol list.
- *
- * Also creates grandchildren for each cacheline that child shares with parent.
+ * For a primary symbol, find all other symbols that share its cachelines by
+ * directly scanning the cacheline detail entries. Creates sharing symbol entries
+ * and their cacheline detail children.
  */
-static void step3_build_children_from_cachelines(struct hist_entry *parent_he)
+static void build_sharing_symbols_from_cachelines(struct hist_entry *primary_he)
 {
-	struct c2c_hist_entry *parent_c2c = container_of(parent_he, struct c2c_hist_entry, he);
-	struct symbol_cacheline_ref *parent_ref;
-	struct rb_root child_tree = RB_ROOT; /* Temp tree for deduplication */
-	uint64_t parent_iaddr;
-	int child_count = 0;
+	struct c2c_hist_entry *primary_c2c = container_of(primary_he, struct c2c_hist_entry, he);
+	struct symbol_cacheline_ref *primary_ref;
+	struct rb_root sharing_tree = RB_ROOT; /* Temp tree for deduplication */
+	uint64_t primary_iaddr;
+	int sharing_count = 0;
 
-	parent_iaddr = parent_he->mem_info ?
-		mem_info__iaddr(parent_he->mem_info)->addr :
-		(parent_he->ms.sym ? parent_he->ms.sym->start : 0);
+	primary_iaddr = get_hist_entry_iaddr(primary_he);
 
-	/* For each cacheline the parent accesses */
-	list_for_each_entry(parent_ref, &parent_c2c->_symbol_accessed_cachelines, list) {
-		struct c2c_hist_entry *cacheline_he = parent_ref->cacheline;
-		struct c2c_stats parent_cl_stats;
-		struct compute_stats parent_cl_cstats;
+	/* For each cacheline the primary symbol accesses */
+	list_for_each_entry(primary_ref, &primary_c2c->_symbol_accessed_cachelines, list) {
+		struct c2c_hist_entry *cacheline_src_he = primary_ref->cacheline;
+		struct c2c_stats primary_cl_stats;
+		struct compute_stats primary_cl_cstats;
 		struct rb_node *nd;
 
-		/* Check if parent has HITM on this cacheline */
-		if (!step4_aggregate_child_cacheline_stats(cacheline_he, parent_iaddr,
-							    parent_he->ms.sym, &parent_cl_stats,
-							    &parent_cl_cstats))
+		/* Check if primary has HITM on this cacheline */
+		if (!aggregate_symbol_cacheline_stats(cacheline_src_he, primary_iaddr,
+						      primary_he->ms.sym, &primary_cl_stats,
+						      &primary_cl_cstats))
 			continue;
 
-		if (HITM_COUNT(&parent_cl_stats) == 0)
+		if (HITM_COUNT(&primary_cl_stats) == 0)
 			continue;
 
 		/* Scan all symbols in this cacheline's detail entries */
-		nd = rb_first_cached(&cacheline_he->hists->hists.entries);
+		nd = rb_first_cached(&cacheline_src_he->hists->hists.entries);
 		while (nd) {
-			struct hist_entry *he_detail = rb_entry(nd, struct hist_entry, rb_node);
-			struct c2c_hist_entry *c2c_detail;
+			struct hist_entry *detail_he = rb_entry(nd, struct hist_entry, rb_node);
+			struct c2c_hist_entry *detail_c2c;
 			uint64_t detail_iaddr;
-			struct rb_node **p, *parent_node;
+			struct rb_node **p, *rb_parent;
 			bool found_dup = false;
 
-			if (!he_detail->ms.sym || he_detail->filtered) {
+			if (!detail_he->ms.sym || detail_he->filtered) {
 				nd = rb_next(nd);
 				continue;
 			}
 
-			c2c_detail = container_of(he_detail, struct c2c_hist_entry, he);
-			detail_iaddr = he_detail->mem_info ?
-				mem_info__iaddr(he_detail->mem_info)->addr :
-				he_detail->ms.sym->start;
+			detail_c2c = container_of(detail_he, struct c2c_hist_entry, he);
+			detail_iaddr = get_hist_entry_iaddr(detail_he);
 
-			/* Skip self (same iaddr and symbol as parent) */
-			if (detail_iaddr == parent_iaddr &&
-			    symbol_name_equal(parent_he->ms.sym, he_detail->ms.sym)) {
+			/* Skip self (same iaddr and symbol as primary) */
+			if (detail_iaddr == primary_iaddr &&
+			    symbol_name_equal(primary_he->ms.sym, detail_he->ms.sym)) {
 				nd = rb_next(nd);
 				continue;
 			}
 
 			/* Check for duplicate in our temp tree */
-			p = &child_tree.rb_node;
-			parent_node = NULL;
+			p = &sharing_tree.rb_node;
+			rb_parent = NULL;
 			while (*p) {
-				struct hist_entry *entry = rb_entry(*p, struct hist_entry, rb_node);
-				struct c2c_hist_entry *entry_c2c = container_of(entry, struct c2c_hist_entry, he);
-				uint64_t entry_iaddr = entry->mem_info ?
-					mem_info__iaddr(entry->mem_info)->addr :
-					(entry->ms.sym ? entry->ms.sym->start : 0);
+				struct hist_entry *iter = rb_entry(*p, struct hist_entry, rb_node);
+				struct c2c_hist_entry *iter_c2c = container_of(iter, struct c2c_hist_entry, he);
+				uint64_t iter_iaddr = get_hist_entry_iaddr(iter);
 
-				parent_node = *p;
-				if (detail_iaddr < entry_iaddr)
-					p = &parent_node->rb_left;
-				else if (detail_iaddr > entry_iaddr)
-					p = &parent_node->rb_right;
-				else if (he_detail->ms.sym < entry->ms.sym)
-					p = &parent_node->rb_left;
-				else if (he_detail->ms.sym > entry->ms.sym)
-					p = &parent_node->rb_right;
+				rb_parent = *p;
+				if (detail_iaddr < iter_iaddr)
+					p = &rb_parent->rb_left;
+				else if (detail_iaddr > iter_iaddr)
+					p = &rb_parent->rb_right;
+				else if (detail_he->ms.sym < iter->ms.sym)
+					p = &rb_parent->rb_left;
+				else if (detail_he->ms.sym > iter->ms.sym)
+					p = &rb_parent->rb_right;
 				else {
-					/* Already have this child, aggregate stats */
-					struct symbol_cacheline_ref *cl_ref;
-					bool cl_found = false;
+					/* Already have this sharing symbol, aggregate stats */
+					c2c_add_stats(&iter_c2c->stats, &detail_c2c->stats);
+					c2c_add_cstats(&iter_c2c->cstats, &detail_c2c->cstats);
+					iter->stat.nr_events += HITM_COUNT(&detail_c2c->stats) +
+						detail_c2c->stats.rmt_peer + detail_c2c->stats.lcl_peer;
 
-					c2c_add_stats(&entry_c2c->stats, &c2c_detail->stats);
-					c2c_add_cstats(&entry_c2c->cstats, &c2c_detail->cstats);
-					entry->stat.nr_events += HITM_COUNT(&c2c_detail->stats) +
-						c2c_detail->stats.rmt_peer + c2c_detail->stats.lcl_peer;
-
-					/* Check if this cacheline is already in the list */
-					list_for_each_entry(cl_ref, &entry_c2c->_symbol_accessed_cachelines, list) {
-						if (cl_ref->cacheline == cacheline_he) {
-							cl_found = true;
-							break;
-						}
-					}
-
-					if (!cl_found) {
-						/* Add new cacheline reference */
-						cl_ref = zalloc(sizeof(*cl_ref));
-						if (cl_ref) {
-							cl_ref->cacheline = cacheline_he;
-							list_add_tail(&cl_ref->list, &entry_c2c->_symbol_accessed_cachelines);
-						}
-					}
+					/* Add cacheline reference if not exists */
+					add_cacheline_ref_to_symbol(iter_c2c, cacheline_src_he);
 
 					found_dup = true;
 					break;
@@ -831,28 +834,22 @@ static void step3_build_children_from_cachelines(struct hist_entry *parent_he)
 			}
 
 			if (!found_dup) {
-				/* Create new child entry */
-				struct c2c_hist_entry *child_c2c;
-				struct hist_entry *child_he;
-				struct symbol_cacheline_ref *cl_ref;
+				/* Create new sharing symbol entry */
+				struct c2c_hist_entry *sharing_c2c;
+				struct hist_entry *sharing_he;
 
-				child_he = step3_create_child_entry_from_detail(parent_he, he_detail,
-									&c2c_detail->stats,
-									&c2c_detail->cstats,
-									&child_c2c);
-				if (child_he) {
+				sharing_he = create_sharing_symbol_entry(primary_he, detail_he,
+									 &detail_c2c->stats,
+									 &detail_c2c->cstats,
+									 &sharing_c2c);
+				if (sharing_he) {
 					/* Initialize cacheline list and add first ref */
-					INIT_LIST_HEAD(&child_c2c->_symbol_accessed_cachelines);
+					INIT_LIST_HEAD(&sharing_c2c->_symbol_accessed_cachelines);
+					add_cacheline_ref_to_symbol(sharing_c2c, cacheline_src_he);
 
-					cl_ref = zalloc(sizeof(*cl_ref));
-					if (cl_ref) {
-						cl_ref->cacheline = cacheline_he;
-						list_add_tail(&cl_ref->list, &child_c2c->_symbol_accessed_cachelines);
-					}
-
-					rb_link_node(&child_he->rb_node, parent_node, p);
-					rb_insert_color(&child_he->rb_node, &child_tree);
-					child_count++;
+					rb_link_node(&sharing_he->rb_node, rb_parent, p);
+					rb_insert_color(&sharing_he->rb_node, &sharing_tree);
+					sharing_count++;
 				}
 			}
 
@@ -860,47 +857,45 @@ static void step3_build_children_from_cachelines(struct hist_entry *parent_he)
 		}
 	}
 
-	/* Transfer children from temp tree to parent's hroot_out, sorted by stores
-	 * Also create grandchildren for each cacheline the child shares with parent
+	/* Transfer sharing symbols from temp tree to primary's hroot_out, sorted by stores
+	 * Also create cacheline detail entries for each cacheline the sharing symbol accesses
 	 */
-	while (!RB_EMPTY_ROOT(&child_tree)) {
-		struct rb_node *nd_child = rb_first(&child_tree);
-		struct hist_entry *child_he = rb_entry(nd_child, struct hist_entry, rb_node);
-		struct c2c_hist_entry *child_c2c = container_of(child_he, struct c2c_hist_entry, he);
+	while (!RB_EMPTY_ROOT(&sharing_tree)) {
+		struct rb_node *nd_sharing = rb_first(&sharing_tree);
+		struct hist_entry *sharing_he = rb_entry(nd_sharing, struct hist_entry, rb_node);
+		struct c2c_hist_entry *sharing_c2c = container_of(sharing_he, struct c2c_hist_entry, he);
 		struct symbol_cacheline_ref *cl_ref, *cl_tmp;
-		uint64_t child_iaddr;
-		int grandchild_count = 0;
+		uint64_t sharing_iaddr;
+		int cacheline_count = 0;
 
-		rb_erase(nd_child, &child_tree);
+		rb_erase(nd_sharing, &sharing_tree);
 
-		/* Get child's instruction address for stats aggregation */
-		child_iaddr = child_he->mem_info ?
-			mem_info__iaddr(child_he->mem_info)->addr :
-			(child_he->ms.sym ? child_he->ms.sym->start : 0);
+		/* Get sharing symbol's instruction address for stats aggregation */
+		sharing_iaddr = get_hist_entry_iaddr(sharing_he);
 
-		/* Create grandchildren for each cacheline */
-		list_for_each_entry_safe(cl_ref, cl_tmp, &child_c2c->_symbol_accessed_cachelines, list) {
-			struct c2c_hist_entry *grand_c2c;
-			struct hist_entry *grand_he;
-			struct c2c_stats child_cl_stats;
-			struct compute_stats child_cl_cstats;
+		/* Create cacheline detail entries for each cacheline */
+		list_for_each_entry_safe(cl_ref, cl_tmp, &sharing_c2c->_symbol_accessed_cachelines, list) {
+			struct c2c_hist_entry *cacheline_detail_c2c;
+			struct hist_entry *cacheline_detail_he;
+			struct c2c_stats sharing_cl_stats;
+			struct compute_stats sharing_cl_cstats;
 
-			/* Re-aggregate child's stats on this cacheline */
-			if (!step4_aggregate_child_cacheline_stats(cl_ref->cacheline, child_iaddr,
-								   child_he->ms.sym,
-								   &child_cl_stats,
-								   &child_cl_cstats)) {
+			/* Re-aggregate sharing symbol's stats on this cacheline */
+			if (!aggregate_symbol_cacheline_stats(cl_ref->cacheline, sharing_iaddr,
+							      sharing_he->ms.sym,
+							      &sharing_cl_stats,
+							      &sharing_cl_cstats)) {
 				list_del(&cl_ref->list);
 				free(cl_ref);
 				continue;
 			}
 
-			grand_he = step4_create_cacheline_grandchild(child_he, cl_ref->cacheline,
-								     &child_cl_stats, &child_cl_cstats,
-								     &grand_c2c);
-			if (grand_he) {
-				step4_insert_grandchild_sorted(&child_he->hroot_out, grand_he);
-				grandchild_count++;
+			cacheline_detail_he = create_cacheline_detail_entry(sharing_he, cl_ref->cacheline,
+									    &sharing_cl_stats, &sharing_cl_cstats,
+									    &cacheline_detail_c2c);
+			if (cacheline_detail_he) {
+				insert_cacheline_entry_sorted(&sharing_he->hroot_out, cacheline_detail_he);
+				cacheline_count++;
 			}
 
 			/* Free the cacheline ref after use */
@@ -908,78 +903,79 @@ static void step3_build_children_from_cachelines(struct hist_entry *parent_he)
 			free(cl_ref);
 		}
 
-		if (grandchild_count > 0) {
-			child_he->has_children = true;
-			child_he->leaf = false;
-			child_he->nr_rows = grandchild_count;
+		if (cacheline_count > 0) {
+			sharing_he->has_children = true;
+			sharing_he->leaf = false;
+			sharing_he->nr_rows = cacheline_count;
 		}
 
-		step3_insert_child_into_tree(&parent_he->hroot_out, child_he);
+		insert_sharing_symbol_entry_sorted(&primary_he->hroot_out, sharing_he);
 	}
 
-	if (child_count > 0) {
-		parent_he->has_children = true;
-		parent_he->unfolded = false;
-		parent_he->leaf = false;
-		parent_he->nr_rows = child_count;
+	if (sharing_count > 0) {
+		primary_he->has_children = true;
+		primary_he->unfolded = false;
+		primary_he->leaf = false;
+		primary_he->nr_rows = sharing_count;
 	}
 }
 
 /**
- * step3_insert_child_into_tree - Insert child into parent's rb-tree sorted by stores
+ * insert_sharing_symbol_entry_sorted - Insert sharing symbol entry sorted by stores
+ * @tree: RB-tree to insert into
+ * @sharing_he: Sharing symbol histogram entry to insert
  */
-static void step3_insert_child_into_tree(struct rb_root_cached *tree,
-					 struct hist_entry *child_he)
+static void insert_sharing_symbol_entry_sorted(struct rb_root_cached *tree,
+					       struct hist_entry *sharing_he)
 {
 	struct rb_node **p = &tree->rb_root.rb_node;
 	struct rb_node *parent = NULL;
-	struct c2c_hist_entry *child_c2c = container_of(child_he, struct c2c_hist_entry, he);
+	struct c2c_hist_entry *sharing_c2c = container_of(sharing_he, struct c2c_hist_entry, he);
 	bool leftmost = true;
 
 	while (*p != NULL) {
-		struct hist_entry *entry = rb_entry(*p, struct hist_entry, rb_node);
-		struct c2c_hist_entry *entry_c2c = container_of(entry, struct c2c_hist_entry, he);
+		struct hist_entry *iter = rb_entry(*p, struct hist_entry, rb_node);
+		struct c2c_hist_entry *iter_c2c = container_of(iter, struct c2c_hist_entry, he);
 
 		parent = *p;
-		if (child_c2c->stats.store > entry_c2c->stats.store) {
+		if (sharing_c2c->stats.store > iter_c2c->stats.store)
 			p = &parent->rb_left;
-		} else {
+		else {
 			p = &parent->rb_right;
 			leftmost = false;
 		}
 	}
 
-	rb_link_node(&child_he->rb_node, parent, p);
-	rb_insert_color_cached(&child_he->rb_node, tree, leftmost);
+	rb_link_node(&sharing_he->rb_node, parent, p);
+	rb_insert_color_cached(&sharing_he->rb_node, tree, leftmost);
 }
 
 
 /**
- * step3_build_parent_child_relationships - Build parent-child relationships
+ * build_symbol_sharing_relationships - Build sharing relationships for all primary symbols
  *
- * For each parent symbol, find all other symbols that share cachelines with it
- * by directly scanning cacheline detail entries. This catches symbols that
- * may not be in the top-level symbol list.
+ * For each primary symbol, find all other symbols that share cachelines with it
+ * by directly scanning cacheline detail entries.
  */
-static void step3_build_parent_child_relationships(void)
+static void build_symbol_sharing_relationships(void)
 {
-	struct rb_node *nd_parent;
+	struct rb_node *nd_primary;
 
-	/* For each parent symbol, find and create children directly from cacheline details */
-	nd_parent = rb_first_cached(&c2c_ext.symbol_hists.hists.entries);
-	while (nd_parent) {
-		struct hist_entry *parent_he = rb_entry(nd_parent, struct hist_entry, rb_node);
+	/* For each primary symbol, find and create sharing symbol entries */
+	nd_primary = rb_first_cached(&c2c_ext.symbol_hists.hists.entries);
+	while (nd_primary) {
+		struct hist_entry *primary_he = rb_entry(nd_primary, struct hist_entry, rb_node);
 
 		/* Skip if already populated */
-		if (!RB_EMPTY_ROOT(&parent_he->hroot_out.rb_root)) {
-			nd_parent = rb_next(nd_parent);
+		if (!RB_EMPTY_ROOT(&primary_he->hroot_out.rb_root)) {
+			nd_primary = rb_next(nd_primary);
 			continue;
 		}
 
-		/* Build children directly from cacheline details */
-		step3_build_children_from_cachelines(parent_he);
+		/* Build sharing symbols directly from cacheline details */
+		build_sharing_symbols_from_cachelines(primary_he);
 
-		nd_parent = rb_next(nd_parent);
+		nd_primary = rb_next(nd_primary);
 	}
 }
 
@@ -1024,17 +1020,8 @@ static uint64_t get_total_cycles_all_symbols(void)
 	while (nd) {
 		struct hist_entry *he = rb_entry(nd, struct hist_entry, rb_node);
 		struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
-		uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load, total_hitm, symbol_cycles;
 
-		cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
-		cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
-		/* Prevent unsigned underflow by checking before subtraction */
-		total_hitm = (uint64_t)c2c_he->stats.rmt_hitm + c2c_he->stats.lcl_hitm;
-		other_load = (c2c_he->stats.load >= total_hitm) ? c2c_he->stats.load - total_hitm : 0;
-		cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
-
-		symbol_cycles = cycles_rmt + cycles_lcl + cycles_load;
-		total_cycles += symbol_cycles;
+		total_cycles += calculate_symbol_cycles(c2c_he);
 		nd = rb_next(nd);
 	}
 
@@ -1113,10 +1100,7 @@ static int build_symbol_hists_and_refs(void)
 				continue;
 			}
 
-			/* Get instruction address */
-			iaddr = he_detail->mem_info ?
-				mem_info__iaddr(he_detail->mem_info)->addr :
-				he_detail->ms.sym->start;
+			iaddr = get_hist_entry_iaddr(he_detail);
 
 			/* Create mem_info for display */
 			mi_display = mem_info__new();
@@ -1195,24 +1179,9 @@ static int build_symbol_hists_and_refs(void)
 	hists__collapse_resort(&c2c_ext.symbol_hists.hists, NULL);
 	hists__output_resort(&c2c_ext.symbol_hists.hists, NULL);
 
-	/* Calculate total cycles after resort */
+	/* Calculate and cache total cycles after resort */
 	c2c_ext.symbol_total_cycles = 0;
-	nd_cl = rb_first_cached(&c2c_ext.symbol_hists.hists.entries);
-	while (nd_cl) {
-		struct hist_entry *he = rb_entry(nd_cl, struct hist_entry, rb_node);
-		struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
-		uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load, total_hitm;
-
-		cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
-		cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
-		total_hitm = (uint64_t)c2c_he->stats.rmt_hitm + c2c_he->stats.lcl_hitm;
-		other_load = (c2c_he->stats.load >= total_hitm) ?
-			     c2c_he->stats.load - total_hitm : 0;
-		cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
-
-		c2c_ext.symbol_total_cycles += cycles_rmt + cycles_lcl + cycles_load;
-		nd_cl = rb_next(nd_cl);
-	}
+	(void)get_total_cycles_all_symbols();
 
 	/* Enable hierarchy support for symbol view */
 	c2c_ext.symbol_hists.hists.symbol_filter_str = NULL;
@@ -1241,15 +1210,15 @@ static int build_symbol_view_hierarchy(void)
 {
 	int ret;
 
-	/* Phase 1: Build parent nodes with stats aggregation and cacheline references.
+	/* Phase 1: Build primary symbol entries with stats aggregation and cacheline references.
 	 * Also pre-computes total cycles during this pass.
 	 */
 	ret = build_symbol_hists_and_refs();
 	if (ret)
 		return ret;
 
-	/* Phase 2: Build parent-child-grandchild relationships using the reference lists */
-	step3_build_parent_child_relationships();
+	/* Phase 2: Build sharing symbol and cacheline detail relationships */
+	build_symbol_sharing_relationships();
 
 	return 0;
 }
@@ -1432,27 +1401,27 @@ out:
 }
 
 /**
- * free_child_entries - Free child entries of a histogram entry
- * @parent_he: Parent histogram entry whose children to free
+ * free_hierarchy_entries - Free all child entries of a histogram entry recursively
+ * @he: Histogram entry whose children to free
  *
- * Recursively frees all child entries and their associated resources
- * including related symbols, histograms, and memory info.
+ * Recursively frees all child entries (sharing symbols and cacheline details)
+ * and their associated resources including histograms and memory info.
  */
-static void free_child_entries(struct hist_entry *parent_he)
+static void free_hierarchy_entries(struct hist_entry *he)
 {
 	struct rb_node *nd;
 	struct hist_entry *child_he;
-	struct c2c_hist_entry *child_c2c_he;
+	struct c2c_hist_entry *child_c2c;
 
-	if (RB_EMPTY_ROOT(&parent_he->hroot_out.rb_root))
+	if (RB_EMPTY_ROOT(&he->hroot_out.rb_root))
 		return;
 
-	nd = rb_first_cached(&parent_he->hroot_out);
+	nd = rb_first_cached(&he->hroot_out);
 	while (nd) {
 		struct rb_node *next = rb_next(nd);
 
 		child_he = rb_entry(nd, struct hist_entry, rb_node);
-		child_c2c_he = container_of(child_he, struct c2c_hist_entry, he);
+		child_c2c = container_of(child_he, struct c2c_hist_entry, he);
 
 		if (child_he->stat_acc)
 			zfree(&child_he->stat_acc);
@@ -1461,21 +1430,21 @@ static void free_child_entries(struct hist_entry *parent_he)
 			mem_info__put(child_he->mem_info);
 
 		/* Free child's hists */
-		if (child_c2c_he->hists) {
-			hists__delete_entries(&child_c2c_he->hists->hists);
-			zfree(&child_c2c_he->hists);
+		if (child_c2c->hists) {
+			hists__delete_entries(&child_c2c->hists->hists);
+			zfree(&child_c2c->hists);
 		}
 
-		zfree(&child_c2c_he->cpuset);
-		zfree(&child_c2c_he->nodeset);
-		zfree(&child_c2c_he->nodestr);
-		zfree(&child_c2c_he->node_stats);
+		zfree(&child_c2c->cpuset);
+		zfree(&child_c2c->nodeset);
+		zfree(&child_c2c->nodestr);
+		zfree(&child_c2c->node_stats);
 
-		/* Recursively free grandchildren in child_he->hroot_out */
-		free_child_entries(child_he);
+		/* Recursively free children in child_he->hroot_out */
+		free_hierarchy_entries(child_he);
 
-		rb_erase_cached(&child_he->rb_node, &parent_he->hroot_out);
-		free(child_c2c_he);
+		rb_erase_cached(&child_he->rb_node, &he->hroot_out);
+		free(child_c2c);
 
 		nd = next;
 	}
