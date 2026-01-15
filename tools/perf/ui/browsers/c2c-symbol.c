@@ -707,19 +707,6 @@ step3_create_child_entry_from_detail(struct hist_entry *parent_he,
 }
 
 /**
- * struct child_cacheline_ref - Tracks which cacheline a child accesses
- *
- * Used during step3 to remember which cachelines each child shares with parent,
- * so we can create grandchildren for each cacheline later.
- */
-struct child_cacheline_ref {
-	struct list_head list;
-	struct c2c_hist_entry *cacheline;
-	struct c2c_stats stats;
-	struct compute_stats cstats;
-};
-
-/**
  * step3_build_children_from_cachelines - Build children directly from cacheline details
  *
  * For a parent symbol, find all other symbols that share its cachelines by
@@ -803,7 +790,7 @@ static void step3_build_children_from_cachelines(struct hist_entry *parent_he)
 					p = &parent_node->rb_right;
 				else {
 					/* Already have this child, aggregate stats */
-					struct child_cacheline_ref *cl_ref;
+					struct symbol_cacheline_ref *cl_ref;
 					bool cl_found = false;
 
 					c2c_add_stats(&entry_c2c->stats, &c2c_detail->stats);
@@ -814,8 +801,6 @@ static void step3_build_children_from_cachelines(struct hist_entry *parent_he)
 					/* Check if this cacheline is already in the list */
 					list_for_each_entry(cl_ref, &entry_c2c->_symbol_accessed_cachelines, list) {
 						if (cl_ref->cacheline == cacheline_he) {
-							c2c_add_stats(&cl_ref->stats, &c2c_detail->stats);
-							c2c_add_cstats(&cl_ref->cstats, &c2c_detail->cstats);
 							cl_found = true;
 							break;
 						}
@@ -826,8 +811,6 @@ static void step3_build_children_from_cachelines(struct hist_entry *parent_he)
 						cl_ref = zalloc(sizeof(*cl_ref));
 						if (cl_ref) {
 							cl_ref->cacheline = cacheline_he;
-							memcpy(&cl_ref->stats, &c2c_detail->stats, sizeof(cl_ref->stats));
-							memcpy(&cl_ref->cstats, &c2c_detail->cstats, sizeof(cl_ref->cstats));
 							list_add_tail(&cl_ref->list, &entry_c2c->_symbol_accessed_cachelines);
 						}
 					}
@@ -841,12 +824,12 @@ static void step3_build_children_from_cachelines(struct hist_entry *parent_he)
 				/* Create new child entry */
 				struct c2c_hist_entry *child_c2c;
 				struct hist_entry *child_he;
-				struct child_cacheline_ref *cl_ref;
+				struct symbol_cacheline_ref *cl_ref;
 
 				child_he = step3_create_child_entry_from_detail(parent_he, he_detail,
-										&c2c_detail->stats,
-										&c2c_detail->cstats,
-										&child_c2c);
+									&c2c_detail->stats,
+									&c2c_detail->cstats,
+									&child_c2c);
 				if (child_he) {
 					/* Initialize cacheline list and add first ref */
 					INIT_LIST_HEAD(&child_c2c->_symbol_accessed_cachelines);
@@ -854,8 +837,6 @@ static void step3_build_children_from_cachelines(struct hist_entry *parent_he)
 					cl_ref = zalloc(sizeof(*cl_ref));
 					if (cl_ref) {
 						cl_ref->cacheline = cacheline_he;
-						memcpy(&cl_ref->stats, &c2c_detail->stats, sizeof(cl_ref->stats));
-						memcpy(&cl_ref->cstats, &c2c_detail->cstats, sizeof(cl_ref->cstats));
 						list_add_tail(&cl_ref->list, &child_c2c->_symbol_accessed_cachelines);
 					}
 
@@ -876,18 +857,36 @@ static void step3_build_children_from_cachelines(struct hist_entry *parent_he)
 		struct rb_node *nd_child = rb_first(&child_tree);
 		struct hist_entry *child_he = rb_entry(nd_child, struct hist_entry, rb_node);
 		struct c2c_hist_entry *child_c2c = container_of(child_he, struct c2c_hist_entry, he);
-		struct child_cacheline_ref *cl_ref, *cl_tmp;
+		struct symbol_cacheline_ref *cl_ref, *cl_tmp;
+		uint64_t child_iaddr;
 		int grandchild_count = 0;
 
 		rb_erase(nd_child, &child_tree);
+
+		/* Get child's instruction address for stats aggregation */
+		child_iaddr = child_he->mem_info ?
+			mem_info__iaddr(child_he->mem_info)->addr :
+			(child_he->ms.sym ? child_he->ms.sym->start : 0);
 
 		/* Create grandchildren for each cacheline */
 		list_for_each_entry_safe(cl_ref, cl_tmp, &child_c2c->_symbol_accessed_cachelines, list) {
 			struct c2c_hist_entry *grand_c2c;
 			struct hist_entry *grand_he;
+			struct c2c_stats child_cl_stats;
+			struct compute_stats child_cl_cstats;
+
+			/* Re-aggregate child's stats on this cacheline */
+			if (!step4_aggregate_child_cacheline_stats(cl_ref->cacheline, child_iaddr,
+								   child_he->ms.sym,
+								   &child_cl_stats,
+								   &child_cl_cstats)) {
+				list_del(&cl_ref->list);
+				free(cl_ref);
+				continue;
+			}
 
 			grand_he = step4_create_cacheline_grandchild(child_he, cl_ref->cacheline,
-								     &cl_ref->stats, &cl_ref->cstats,
+								     &child_cl_stats, &child_cl_cstats,
 								     &grand_c2c);
 			if (grand_he) {
 				step4_insert_grandchild_sorted(&child_he->hroot_out, grand_he);
@@ -927,7 +926,6 @@ static void step3_insert_child_into_tree(struct rb_root_cached *tree,
 	struct c2c_hist_entry *child_c2c = container_of(child_he, struct c2c_hist_entry, he);
 	bool leftmost = true;
 
-	/* Find insertion point maintaining descending sort order by stores */
 	while (*p != NULL) {
 		struct hist_entry *entry = rb_entry(*p, struct hist_entry, rb_node);
 		struct c2c_hist_entry *entry_c2c = container_of(entry, struct c2c_hist_entry, he);
