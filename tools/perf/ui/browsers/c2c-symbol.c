@@ -169,6 +169,9 @@ static void *c2c_he_ext_zalloc(size_t size)
 	init_stats(&c2c_he->cstats.rmt_peer);
 	init_stats(&c2c_he->cstats.load);
 
+	/* Initialize cacheline reference list */
+	INIT_LIST_HEAD(&c2c_he->_symbol_accessed_cachelines);
+
 	return &c2c_he->he;
 
 out_free:
@@ -185,6 +188,7 @@ out_free:
 static void c2c_he_ext_free(void *he)
 {
 	struct c2c_hist_entry *c2c_he;
+	struct symbol_cacheline_ref *ref, *tmp;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
@@ -196,6 +200,12 @@ static void c2c_he_ext_free(void *he)
 
 	/* Free child entries first */
 	free_child_entries((struct hist_entry *)he);
+
+	/* Free symbol_cacheline_ref entries in _symbol_accessed_cachelines list */
+	list_for_each_entry_safe(ref, tmp, &c2c_he->_symbol_accessed_cachelines, list) {
+		list_del(&ref->list);
+		free(ref);
+	}
 
 	/* Free all fields */
 	zfree(&c2c_he->nodeset);
@@ -975,94 +985,24 @@ static void step3_build_parent_child_relationships(void)
 
 
 /**
- * Temporary structure for symbol-level aggregation during hierarchy building
- * Used to deduplicate and aggregate stats by (iaddr, symbol) before creating hist entries
+ * add_cacheline_ref_to_symbol - Add cacheline reference to symbol entry if not exists
  */
-struct symbol_agg_entry {
-	struct rb_node rb_node;			/* Red-black tree node for fast lookup */
-	uint64_t iaddr;				/* Instruction address */
-	struct symbol *sym;			/* Symbol pointer */
-	struct c2c_stats stats;			/* Aggregated C2C statistics */
-	struct compute_stats cstats;		/* Aggregated compute statistics */
-	struct list_head cacheline_refs;	/* List of cacheline references */
-	struct maps *maps;			/* Maps reference (for creating hist entry) */
-	struct map *map;			/* Map reference */
-};
-
-/**
- * find_or_create_symbol_agg - Find or create symbol aggregation entry
- *
- * Uses binary search in red-black tree for O(log N) lookup.
- * Returns: Pointer to symbol_agg_entry (existing or newly created)
- */
-static struct symbol_agg_entry *
-find_or_create_symbol_agg(struct rb_root *root, uint64_t iaddr,
-				  struct symbol *sym, struct maps *maps,
-				  struct map *map)
+static void add_cacheline_ref_to_symbol(struct c2c_hist_entry *c2c_he,
+					struct c2c_hist_entry *cacheline_he)
 {
-	struct rb_node **p = &root->rb_node;
-	struct rb_node *parent = NULL;
-	struct symbol_agg_entry *entry;
+	struct symbol_cacheline_ref *ref;
 
-	/* Binary search */
-	while (*p) {
-		parent = *p;
-		entry = rb_entry(parent, struct symbol_agg_entry, rb_node);
-
-		if (iaddr < entry->iaddr)
-			p = &parent->rb_left;
-		else if (iaddr > entry->iaddr)
-			p = &parent->rb_right;
-		else if (sym < entry->sym)
-			p = &parent->rb_left;
-		else if (sym > entry->sym)
-			p = &parent->rb_right;
-		else
-			return entry;  /* Found existing */
+	/* Check if already in list */
+	list_for_each_entry(ref, &c2c_he->_symbol_accessed_cachelines, list) {
+		if (ref->cacheline == cacheline_he)
+			return;
 	}
 
-	/* Create new entry */
-	entry = zalloc(sizeof(*entry));
-	if (!entry)
-		return NULL;
-
-	entry->iaddr = iaddr;
-	entry->sym = sym;
-	entry->maps = maps__get(maps);
-	entry->map = map__get(map);
-	INIT_LIST_HEAD(&entry->cacheline_refs);
-	memset(&entry->stats, 0, sizeof(entry->stats));
-	memset(&entry->cstats, 0, sizeof(entry->cstats));
-
-	/* Insert into tree */
-	rb_link_node(&entry->rb_node, parent, p);
-	rb_insert_color(&entry->rb_node, root);
-
-	return entry;
-}
-
-/**
- * free_symbol_agg_tree - Free all entries in symbol aggregation tree
- */
-static void free_symbol_agg_tree(struct rb_root *root)
-{
-	struct rb_node *nd;
-	struct symbol_agg_entry *entry;
-	struct symbol_cacheline_ref *ref, *tmp;
-
-	while ((nd = rb_first(root)) != NULL) {
-		entry = rb_entry(nd, struct symbol_agg_entry, rb_node);
-		rb_erase(nd, root);
-
-		/* Free cacheline reference list */
-		list_for_each_entry_safe(ref, tmp, &entry->cacheline_refs, list) {
-			list_del(&ref->list);
-			free(ref);
-		}
-
-		maps__put(entry->maps);
-		map__put(entry->map);
-		free(entry);
+	/* Add new reference */
+	ref = zalloc(sizeof(*ref));
+	if (ref) {
+		ref->cacheline = cacheline_he;
+		list_add_tail(&ref->list, &c2c_he->_symbol_accessed_cachelines);
 	}
 }
 
@@ -1103,122 +1043,19 @@ static uint64_t get_total_cycles_all_symbols(void)
 }
 
 /**
- * create_symbol_entry - Create new symbol histogram entry
- * @iaddr: Instruction address
- * @sym: Symbol pointer
- * @maps: Maps reference
- * @map: Map reference
- * @thread: Thread reference
- *
- * Creates and initializes a new histogram entry. Should only be called
- * after confirming the entry doesn't exist.
- * Returns: Pointer to c2c_hist_entry if successful, NULL on error
- */
-static struct c2c_hist_entry *
-create_symbol_entry(uint64_t iaddr, struct symbol *sym,
-		    struct maps *maps, struct map *map,
-		    struct thread *thread)
-{
-	struct addr_location al;
-	struct perf_sample sample = {};
-	struct mem_info *mi_display;
-	struct hist_entry *he;
-	struct c2c_hist_entry *c2c_he;
-
-	/* Create mem_info for display */
-	mi_display = mem_info__new();
-	if (mi_display) {
-		mem_info__iaddr(mi_display)->addr = iaddr;
-		mem_info__iaddr(mi_display)->ms.maps = maps;
-		mem_info__iaddr(mi_display)->ms.map = map;
-		mem_info__iaddr(mi_display)->ms.sym = sym;
-		mem_info__daddr(mi_display)->addr = 0;
-	}
-
-	/* Create address location */
-	addr_location__init(&al);
-	al.thread = thread__get(thread);
-	al.maps = maps__get(maps);
-	al.map = map__get(map);
-	al.sym = sym;
-	al.addr = iaddr;
-	al.level = PERF_RECORD_MISC_KERNEL;
-	al.cpumode = PERF_RECORD_MISC_KERNEL;
-	al.cpu = 0;
-	al.socket = 0;
-	al.filtered = 0;
-
-	/* Create sample */
-	sample.period = 1;
-	sample.weight = 1;
-	sample.ip = iaddr;
-	sample.pid = thread__pid(thread);
-	sample.tid = thread__tid(thread);
-	sample.cpu = 0;
-
-	/* Add entry to histogram */
-	he = hists__add_entry_ops(&c2c_ext.symbol_hists.hists,
-				  &c2c_symbol_entry_ops,
-				  &al, NULL, NULL, mi_display,
-				  NULL, &sample, true);
-
-	addr_location__exit(&al);
-	if (mi_display)
-		mem_info__put(mi_display);
-
-	if (!he)
-		return NULL;
-
-	c2c_he = container_of(he, struct c2c_hist_entry, he);
-
-	/* Initialize structures */
-	INIT_LIST_HEAD(&c2c_he->_symbol_accessed_cachelines);
-	memset(&c2c_he->stats, 0, sizeof(c2c_he->stats));
-	memset(&c2c_he->cstats, 0, sizeof(c2c_he->cstats));
-
-	hists__inc_nr_samples(&c2c_ext.symbol_hists.hists, he->filtered);
-	he->hpp_list = &c2c_ext.symbol_hists.list;
-
-	return c2c_he;
-}
-
-/**
- * add_cacheline_to_symbol_agg - Add cacheline reference to symbol aggregation entry
- */
-static void add_cacheline_to_symbol_agg(struct symbol_agg_entry *agg_entry,
-					struct c2c_hist_entry *cacheline_he)
-{
-	struct symbol_cacheline_ref *ref, *existing;
-
-	/* Check if already in list */
-	list_for_each_entry(existing, &agg_entry->cacheline_refs, list) {
-		if (existing->cacheline == cacheline_he)
-			return;
-	}
-
-	/* Add new reference */
-	ref = zalloc(sizeof(*ref));
-	if (ref) {
-		ref->cacheline = cacheline_he;
-		list_add_tail(&ref->list, &agg_entry->cacheline_refs);
-	}
-}
-
-/**
  * build_symbol_hists_and_refs - Build symbol histograms and cacheline references
  *
- * Optimized single-pass algorithm with temporary aggregation tree:
+ * Single-pass algorithm using histogram's built-in deduplication:
  *   1. Single traversal of cacheline hierarchy
- *   2. Aggregates by (iaddr, symbol) using temporary rb-tree for O(log N) dedup
- *   3. Builds cacheline reference lists during aggregation
- *   4. Creates histogram entries only once per unique symbol
+ *   2. Uses hists__add_entry_ops which handles dedup via sort keys
+ *   3. Aggregates c2c_stats/cstats and builds cacheline references
+ *   4. Calculates total cycles during this pass
  *
  * Returns: 0 on success, negative error code on failure
  */
 static int build_symbol_hists_and_refs(void)
 {
-	struct rb_root symbol_agg_root = RB_ROOT;
-	struct rb_node *nd_cl, *nd_agg;
+	struct rb_node *nd_cl;
 	struct thread *synthetic_thread = NULL;
 	int ret;
 
@@ -1233,13 +1070,6 @@ static int build_symbol_hists_and_refs(void)
 	if (ret)
 		return ret;
 
-	/* Setup output fields for symbol view - sorted by cycles percentage */
-	ret = c2c_symbol_hists__reinit(&c2c_ext.symbol_hists,
-		"cycles_percent,total_stores,iaddr_symbol,symbol_view,cacheline_symbol",
-		"cycles_percent", NULL);
-	if (ret)
-		return ret;
-
 	/* Get first thread for consistent aggregation */
 	nd_cl = rb_first_cached(&c2c.hists.hists.entries);
 	if (nd_cl) {
@@ -1250,7 +1080,7 @@ static int build_symbol_hists_and_refs(void)
 	if (!synthetic_thread)
 		return -EINVAL;
 
-	/* Phase 1: Single-pass aggregation with cacheline reference building */
+	/* Single-pass: traverse cachelines, add/aggregate symbols */
 	nd_cl = rb_first_cached(&c2c.hists.hists.entries);
 	while (nd_cl) {
 		struct hist_entry *he_cl = rb_entry(nd_cl, struct hist_entry, rb_node);
@@ -1271,7 +1101,11 @@ static int build_symbol_hists_and_refs(void)
 			struct hist_entry *he_detail = rb_entry(nd_sym, struct hist_entry, rb_node);
 			struct c2c_hist_entry *c2c_detail = container_of(he_detail,
 									 struct c2c_hist_entry, he);
-			struct symbol_agg_entry *agg_entry;
+			struct addr_location al;
+			struct perf_sample sample = {};
+			struct mem_info *mi_display;
+			struct hist_entry *he;
+			struct c2c_hist_entry *c2c_he;
 			uint64_t iaddr;
 
 			if (!he_detail->ms.sym || he_detail->filtered) {
@@ -1284,22 +1118,62 @@ static int build_symbol_hists_and_refs(void)
 				mem_info__iaddr(he_detail->mem_info)->addr :
 				he_detail->ms.sym->start;
 
-			/* Find or create symbol aggregation entry */
-			agg_entry = find_or_create_symbol_agg(&symbol_agg_root, iaddr,
-							      he_detail->ms.sym,
-							      he_detail->ms.maps,
-							      he_detail->ms.map);
-			if (!agg_entry) {
-				nd_sym = rb_next(nd_sym);
-				continue;
+			/* Create mem_info for display */
+			mi_display = mem_info__new();
+			if (mi_display) {
+				mem_info__iaddr(mi_display)->addr = iaddr;
+				mem_info__iaddr(mi_display)->ms.maps = he_detail->ms.maps;
+				mem_info__iaddr(mi_display)->ms.map = he_detail->ms.map;
+				mem_info__iaddr(mi_display)->ms.sym = he_detail->ms.sym;
+				mem_info__daddr(mi_display)->addr = 0;
 			}
 
-			/* Aggregate stats */
-			c2c_add_stats(&agg_entry->stats, &c2c_detail->stats);
-			c2c_add_cstats(&agg_entry->cstats, &c2c_detail->cstats);
+			/* Create address location */
+			addr_location__init(&al);
+			al.thread = thread__get(synthetic_thread);
+			al.maps = maps__get(he_detail->ms.maps);
+			al.map = map__get(he_detail->ms.map);
+			al.sym = he_detail->ms.sym;
+			al.addr = iaddr;
+			al.level = PERF_RECORD_MISC_KERNEL;
+			al.cpumode = PERF_RECORD_MISC_KERNEL;
+			al.cpu = 0;
+			al.socket = 0;
+			al.filtered = 0;
 
-			/* Build cacheline reference list */
-			add_cacheline_to_symbol_agg(agg_entry, cacheline_he);
+			/* Create sample */
+			sample.period = 1;
+			sample.weight = 1;
+			sample.ip = iaddr;
+			sample.pid = thread__pid(synthetic_thread);
+			sample.tid = thread__tid(synthetic_thread);
+			sample.cpu = 0;
+
+			/*
+			 * Add entry - histogram handles dedup via sort keys.
+			 * If entry exists, it merges he_stat; we need to merge c2c_stats.
+			 */
+			he = hists__add_entry_ops(&c2c_ext.symbol_hists.hists,
+						  &c2c_symbol_entry_ops,
+						  &al, NULL, NULL, mi_display,
+						  NULL, &sample, true);
+
+			addr_location__exit(&al);
+			if (mi_display)
+				mem_info__put(mi_display);
+
+			if (he) {
+				c2c_he = container_of(he, struct c2c_hist_entry, he);
+
+				/* Aggregate C2C stats (histogram only merges he_stat) */
+				c2c_add_stats(&c2c_he->stats, &c2c_detail->stats);
+				c2c_add_cstats(&c2c_he->cstats, &c2c_detail->cstats);
+
+				/* Add cacheline reference (deduped internally) */
+				add_cacheline_ref_to_symbol(c2c_he, cacheline_he);
+
+				he->hpp_list = &c2c_ext.symbol_hists.list;
+			}
 
 			/* Accumulate to global stats */
 			c2c_add_stats(&c2c_ext.symbol_hists.stats, &c2c_detail->stats);
@@ -1310,56 +1184,37 @@ static int build_symbol_hists_and_refs(void)
 		nd_cl = rb_next(nd_cl);
 	}
 
-	/*
-	 * Phase 2: Create histogram entries from aggregated data.
-	 * Also calculate total cycles for all symbols to avoid a second traversal.
-	 */
-	nd_agg = rb_first(&symbol_agg_root);
-	while (nd_agg) {
-		struct symbol_agg_entry *agg_entry = rb_entry(nd_agg, struct symbol_agg_entry, rb_node);
-		struct c2c_hist_entry *symbol_he;
-		struct symbol_cacheline_ref *ref, *tmp;
-
-		/* Create histogram entry */
-		symbol_he = create_symbol_entry(agg_entry->iaddr, agg_entry->sym,
-						agg_entry->maps, agg_entry->map,
-						synthetic_thread);
-		if (symbol_he) {
-			uint64_t cycles_rmt, cycles_lcl, cycles_load;
-			uint64_t other_load, total_hitm;
-
-			/* Copy aggregated stats */
-			memcpy(&symbol_he->stats, &agg_entry->stats, sizeof(symbol_he->stats));
-			memcpy(&symbol_he->cstats, &agg_entry->cstats, sizeof(symbol_he->cstats));
-
-			/* Transfer cacheline reference list */
-			list_for_each_entry_safe(ref, tmp, &agg_entry->cacheline_refs, list) {
-				list_del(&ref->list);
-				list_add_tail(&ref->list, &symbol_he->_symbol_accessed_cachelines);
-			}
-
-			/* Accumulate total cycles in this pass to avoid re-traversal */
-			cycles_rmt = avg_stats(&symbol_he->cstats.rmt_hitm) * symbol_he->stats.rmt_hitm;
-			cycles_lcl = avg_stats(&symbol_he->cstats.lcl_hitm) * symbol_he->stats.lcl_hitm;
-			total_hitm = (uint64_t)symbol_he->stats.rmt_hitm + symbol_he->stats.lcl_hitm;
-			other_load = (symbol_he->stats.load >= total_hitm) ?
-				     symbol_he->stats.load - total_hitm : 0;
-			cycles_load = avg_stats(&symbol_he->cstats.load) * other_load;
-
-			c2c_ext.symbol_total_cycles += cycles_rmt + cycles_lcl + cycles_load;
-		}
-
-		nd_agg = rb_next(nd_agg);
-	}
-
-	/* Cleanup aggregation tree */
-	free_symbol_agg_tree(&symbol_agg_root);
+	/* Setup output fields for symbol view - sorted by cycles percentage */
+	ret = c2c_symbol_hists__reinit(&c2c_ext.symbol_hists,
+		"cycles_percent,total_stores,iaddr_symbol,symbol_view,cacheline_symbol",
+		"cycles_percent", NULL);
+	if (ret)
+		return ret;
 
 	/* Sort and layout symbol histogram by cycles percentage */
 	hists__collapse_resort(&c2c_ext.symbol_hists.hists, NULL);
 	hists__output_resort(&c2c_ext.symbol_hists.hists, NULL);
 
-	/* Enable hierarchy support for symbol view to allow multi-level display */
+	/* Calculate total cycles after resort */
+	c2c_ext.symbol_total_cycles = 0;
+	nd_cl = rb_first_cached(&c2c_ext.symbol_hists.hists.entries);
+	while (nd_cl) {
+		struct hist_entry *he = rb_entry(nd_cl, struct hist_entry, rb_node);
+		struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
+		uint64_t cycles_rmt, cycles_lcl, cycles_load, other_load, total_hitm;
+
+		cycles_rmt = avg_stats(&c2c_he->cstats.rmt_hitm) * c2c_he->stats.rmt_hitm;
+		cycles_lcl = avg_stats(&c2c_he->cstats.lcl_hitm) * c2c_he->stats.lcl_hitm;
+		total_hitm = (uint64_t)c2c_he->stats.rmt_hitm + c2c_he->stats.lcl_hitm;
+		other_load = (c2c_he->stats.load >= total_hitm) ?
+			     c2c_he->stats.load - total_hitm : 0;
+		cycles_load = avg_stats(&c2c_he->cstats.load) * other_load;
+
+		c2c_ext.symbol_total_cycles += cycles_rmt + cycles_lcl + cycles_load;
+		nd_cl = rb_next(nd_cl);
+	}
+
+	/* Enable hierarchy support for symbol view */
 	c2c_ext.symbol_hists.hists.symbol_filter_str = NULL;
 	c2c_ext.symbol_hists.hists.socket_filter = -1;
 	c2c_ext.symbol_hists.hists.nr_hpp_node = 0;
@@ -1985,6 +1840,7 @@ static int c2c_symbol_hists__reinit(struct c2c_hists *c2c_hists,
 				   struct perf_env *env)
 {
 	perf_hpp__reset_output_field(&c2c_hists->list);
+	INIT_LIST_HEAD(&c2c_hists->list.sorts);
 	return symbol_hpp_list__parse(&c2c_hists->list, output, sort, env);
 }
 
