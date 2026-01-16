@@ -2,13 +2,12 @@
 /**
  * C2C Symbol Browser - Symbol-level cacheline sharing analysis
  *
- * Displays a 4-level hierarchy showing which symbols share cachelines:
- *   Level 1: Symbols sorted by cycles percentage
+ * Displays a 3-level hierarchy showing which symbols share cachelines:
+ *   Level 1: Primary symbols sorted by cycles percentage
  *   Level 2: Other symbols sharing cachelines with level 1 symbols
  *   Level 3: Specific shared cachelines between symbol pairs
- *   Level 4: Cacheline detail view
  *
- * Uses _symbol_accessed_cachelines linked list to avoid data duplication.
+ * Uses c2c_hist_entry->hists to build hierarchy (no extra data structures).
  */
 
 #include <unistd.h>
@@ -143,10 +142,6 @@ static int c2c_symbol_hists__reinit(struct c2c_hists *c2c_hists,
 				   const char *output, const char *sort,
 				   struct perf_env *env);
 static void free_hierarchy_entries(struct hist_entry *he);
-static void insert_sharing_symbol_entry_sorted(struct rb_root_cached *tree,
-					       struct hist_entry *sharing_he);
-static void add_cacheline_ref_to_symbol(struct c2c_hist_entry *c2c_he,
-					struct c2c_hist_entry *cacheline_he);
 
 /**
  * c2c_he_ext_zalloc - Allocate histogram entry for symbol view
@@ -184,9 +179,6 @@ static void *c2c_he_ext_zalloc(size_t size)
 	init_stats(&c2c_he->cstats.rmt_peer);
 	init_stats(&c2c_he->cstats.load);
 
-	/* Initialize cacheline reference list */
-	INIT_LIST_HEAD(&c2c_he->_symbol_accessed_cachelines);
-
 	return &c2c_he->he;
 
 out_free:
@@ -203,31 +195,23 @@ out_free:
 static void c2c_he_ext_free(void *he)
 {
 	struct c2c_hist_entry *c2c_he;
-	struct symbol_cacheline_ref *ref, *tmp;
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 
-	/* Free base c2c_hist_entry */
+	/* Free sub-hists (used for hierarchy) */
 	if (c2c_he->hists) {
 		hists__delete_entries(&c2c_he->hists->hists);
 		zfree(&c2c_he->hists);
 	}
 
-	/* Free child entries first */
+	/* Free child entries in hroot_out */
 	free_hierarchy_entries((struct hist_entry *)he);
-
-	/* Free symbol_cacheline_ref entries in _symbol_accessed_cachelines list */
-	list_for_each_entry_safe(ref, tmp, &c2c_he->_symbol_accessed_cachelines, list) {
-		list_del(&ref->list);
-		free(ref);
-	}
 
 	/* Free all fields */
 	zfree(&c2c_he->nodeset);
 	zfree(&c2c_he->cpuset);
 	zfree(&c2c_he->nodestr);
 	zfree(&c2c_he->node_stats);
-
 
 	/* Free the structure */
 	free(c2c_he);
@@ -497,509 +481,315 @@ static void c2c_add_cstats(struct compute_stats *dest, struct compute_stats *src
 	merge_stats(&dest->load, &src->load);
 }
 
-/**
- * aggregate_symbol_cacheline_stats - Aggregate stats for a symbol on a cacheline
- * @cacheline_he: Cacheline histogram entry containing detail entries
- * @symbol_iaddr: Instruction address of the symbol to match
- * @sym: Symbol to match
- * @out_stats: Output C2C statistics
- * @out_cstats: Output compute statistics
- *
- * Returns: true if matching entries found, false otherwise
- */
-static bool aggregate_symbol_cacheline_stats(struct c2c_hist_entry *cacheline_he,
-					     uint64_t symbol_iaddr,
-					     struct symbol *sym,
-					     struct c2c_stats *out_stats,
-					     struct compute_stats *out_cstats)
+static bool hist_entry__add_c2c_stats(struct hist_entry *he, struct c2c_stats *stats)
 {
-	struct rb_node *nd;
-	bool found = false;
+	u64 nr_events = HITM_COUNT(stats) + stats->rmt_peer + stats->lcl_peer;
+	u64 weight1 = HITM_COUNT(stats);
 
-	memset(out_stats, 0, sizeof(*out_stats));
-	memset(out_cstats, 0, sizeof(*out_cstats));
+	he->stat.nr_events += nr_events;
+	he->stat.period += nr_events;
+	he->stat.weight1 += weight1;
 
-	if (!cacheline_he->hists || !cacheline_he->hists->hists.entries.rb_root.rb_node)
-		return false;
+	if (!symbol_conf.cumulate_callchain)
+		return true;
 
-	nd = rb_first_cached(&cacheline_he->hists->hists.entries);
-	while (nd) {
-		struct hist_entry *detail_he = rb_entry(nd, struct hist_entry, rb_node);
-		struct c2c_hist_entry *detail_c2c;
-
-		if (!detail_he->ms.sym || detail_he->filtered) {
-			nd = rb_next(nd);
-			continue;
-		}
-
-		if (get_hist_entry_iaddr(detail_he) == symbol_iaddr &&
-		    symbol_name_equal(sym, detail_he->ms.sym)) {
-			found = true;
-			detail_c2c = container_of(detail_he, struct c2c_hist_entry, he);
-			c2c_add_stats(out_stats, &detail_c2c->stats);
-			c2c_add_cstats(out_cstats, &detail_c2c->cstats);
-		}
-
-		nd = rb_next(nd);
+	if (!he->stat_acc) {
+		he->stat_acc = calloc(1, sizeof(struct he_stat));
+		if (!he->stat_acc)
+			return false;
 	}
 
-	return found;
+	he->stat_acc->nr_events += nr_events;
+	he->stat_acc->period += nr_events;
+	he->stat_acc->weight1 += weight1;
+
+	return true;
 }
 
 /**
- * create_cacheline_detail_entry - Create a cacheline detail entry under sharing symbol
- * @sharing_he: Parent sharing symbol histogram entry
- * @cacheline_src_he: Source cacheline histogram entry for address info
- * @stats: C2C statistics for this cacheline access
- * @cstats: Compute statistics for this cacheline access
- * @out_c2c_he: Output pointer to created c2c_hist_entry
+ * find_or_create_level1_entry - Find or create a level 1 (primary symbol) entry
+ * @sym: Symbol for the entry
+ * @iaddr: Instruction address
+ * @detail_he: Source detail entry for attributes
+ * @synthetic_thread: Thread to use for new entries
  *
- * Creates a leaf entry representing a specific cacheline that is shared
- * between the primary symbol and the sharing symbol.
- *
- * Returns: Pointer to created hist_entry, or NULL on failure
+ * Returns: Pointer to the level 1 hist_entry, or NULL on failure
  */
 static struct hist_entry *
-create_cacheline_detail_entry(struct hist_entry *sharing_he,
-			      struct c2c_hist_entry *cacheline_src_he,
-			      struct c2c_stats *stats,
-			      struct compute_stats *cstats,
-			      struct c2c_hist_entry **out_c2c_he)
-{
-	struct c2c_hist_entry *cacheline_c2c;
-	struct hist_entry *cacheline_he;
-
-	cacheline_c2c = zalloc(sizeof(*cacheline_c2c));
-	if (!cacheline_c2c)
-		return NULL;
-
-	cacheline_he = &cacheline_c2c->he;
-
-	/* Copy base info from source cacheline entry */
-	memcpy(&cacheline_he->ms, &cacheline_src_he->he.ms, sizeof(struct map_symbol));
-
-	/* Clone mem_info from source to get the data address */
-	if (cacheline_src_he->he.mem_info)
-		cacheline_he->mem_info = mem_info__clone(cacheline_src_he->he.mem_info);
-
-	/* Copy basic attributes from source cacheline */
-	cacheline_he->thread = cacheline_src_he->he.thread;
-	cacheline_he->cpumode = cacheline_src_he->he.cpumode;
-	cacheline_he->cpu = cacheline_src_he->he.cpu;
-	cacheline_he->socket = cacheline_src_he->he.socket;
-
-	/* Set hierarchy info */
-	cacheline_he->parent_he = sharing_he;
-	cacheline_he->depth = sharing_he->depth + 1;
-	cacheline_he->leaf = true; /* Cachelines are leaf nodes */
-	cacheline_he->hists = &c2c_ext.symbol_hists.hists;
-	cacheline_he->filtered = false;
-	cacheline_he->unfolded = false;
-	cacheline_he->has_children = false;
-	cacheline_he->has_no_entry = false;
-	cacheline_he->nr_rows = 0;
-	cacheline_he->row_offset = 0;
-
-	/* Set statistics */
-	memset(&cacheline_he->stat, 0, sizeof(cacheline_he->stat));
-	cacheline_he->stat.nr_events = HITM_COUNT(stats) + stats->rmt_peer + stats->lcl_peer;
-	cacheline_he->stat.period = cacheline_he->stat.nr_events;
-	cacheline_he->stat.weight1 = HITM_COUNT(stats);
-
-	/* Allocate stat_acc if needed */
-	if (symbol_conf.cumulate_callchain) {
-		cacheline_he->stat_acc = calloc(1, sizeof(struct he_stat));
-		if (cacheline_he->stat_acc)
-			memcpy(cacheline_he->stat_acc, &cacheline_he->stat, sizeof(struct he_stat));
-	}
-
-	/* Initialize rb-tree and list structures */
-	cacheline_he->hroot_in = RB_ROOT_CACHED;
-	cacheline_he->hroot_out = RB_ROOT_CACHED;
-	INIT_LIST_HEAD(&cacheline_he->pairs.node);
-	cacheline_he->hpp_list = &c2c_ext.symbol_hists.list;
-
-	/* Copy C2C stats and compute stats */
-	memcpy(&cacheline_c2c->stats, stats, sizeof(cacheline_c2c->stats));
-	memcpy(&cacheline_c2c->cstats, cstats, sizeof(cacheline_c2c->cstats));
-
-	*out_c2c_he = cacheline_c2c;
-	return cacheline_he;
-}
-
-/**
- * insert_cacheline_entry_sorted - Insert cacheline entry sorted by stores count
- * @tree: RB-tree to insert into
- * @cacheline_he: Cacheline histogram entry to insert
- */
-static void insert_cacheline_entry_sorted(struct rb_root_cached *tree,
-					  struct hist_entry *cacheline_he)
-{
-	struct rb_node **p = &tree->rb_root.rb_node;
-	struct rb_node *parent = NULL;
-	struct c2c_hist_entry *cacheline_c2c = container_of(cacheline_he, struct c2c_hist_entry, he);
-	bool leftmost = true;
-
-	while (*p != NULL) {
-		struct hist_entry *iter = rb_entry(*p, struct hist_entry, rb_node);
-		struct c2c_hist_entry *iter_c2c = container_of(iter, struct c2c_hist_entry, he);
-
-		parent = *p;
-		if (cacheline_c2c->stats.store > iter_c2c->stats.store)
-			p = &parent->rb_left;
-		else {
-			p = &parent->rb_right;
-			leftmost = false;
-		}
-	}
-
-	rb_link_node(&cacheline_he->rb_node, parent, p);
-	rb_insert_color_cached(&cacheline_he->rb_node, tree, leftmost);
-}
-
-/**
- * create_sharing_symbol_entry - Create a sharing symbol entry from detail
- * @primary_he: Primary symbol histogram entry (parent)
- * @detail_he: Source detail entry containing symbol info
- * @stats: C2C statistics
- * @cstats: Compute statistics
- * @out_c2c_he: Output pointer to created c2c_hist_entry
- *
- * Creates an entry for a symbol that shares cachelines with the primary symbol.
- *
- * Returns: Pointer to created hist_entry, or NULL on failure
- */
-static struct hist_entry *
-create_sharing_symbol_entry(struct hist_entry *primary_he,
+find_or_create_level1_entry(struct symbol *sym, uint64_t iaddr,
 			    struct hist_entry *detail_he,
-			    struct c2c_stats *stats,
-			    struct compute_stats *cstats,
-			    struct c2c_hist_entry **out_c2c_he)
+			    struct thread *synthetic_thread)
 {
-	struct c2c_hist_entry *sharing_c2c;
-	struct hist_entry *sharing_he;
-	uint64_t sharing_iaddr;
+	struct addr_location al;
+	struct perf_sample sample = {};
+	struct mem_info *mi;
+	struct hist_entry *he;
 
-	sharing_iaddr = get_hist_entry_iaddr(detail_he);
-
-	sharing_c2c = zalloc(sizeof(*sharing_c2c));
-	if (!sharing_c2c)
-		return NULL;
-
-	sharing_he = &sharing_c2c->he;
-
-	/* Copy base info from detail entry */
-	memcpy(&sharing_he->ms, &detail_he->ms, sizeof(struct map_symbol));
-
-	/* Clone mem_info with sharing symbol's instruction address */
-	if (detail_he->mem_info) {
-		sharing_he->mem_info = mem_info__clone(detail_he->mem_info);
-		if (sharing_he->mem_info)
-			mem_info__iaddr(sharing_he->mem_info)->addr = sharing_iaddr;
+	/* Create mem_info */
+	mi = mem_info__new();
+	if (mi) {
+		mem_info__iaddr(mi)->addr = iaddr;
+		mem_info__iaddr(mi)->ms.maps = detail_he->ms.maps;
+		mem_info__iaddr(mi)->ms.map = detail_he->ms.map;
+		mem_info__iaddr(mi)->ms.sym = sym;
+		mem_info__daddr(mi)->addr = 0;
 	}
 
-	/* Copy basic attributes */
-	sharing_he->thread = detail_he->thread;
-	sharing_he->cpumode = detail_he->cpumode;
-	sharing_he->cpu = detail_he->cpu;
-	sharing_he->socket = detail_he->socket;
+	/* Create address location */
+	addr_location__init(&al);
+	al.thread = thread__get(synthetic_thread);
+	al.maps = maps__get(detail_he->ms.maps);
+	al.map = map__get(detail_he->ms.map);
+	al.sym = sym;
+	al.addr = iaddr;
+	al.level = PERF_RECORD_MISC_KERNEL;
+	al.cpumode = PERF_RECORD_MISC_KERNEL;
+	al.cpu = 0;
+	al.socket = 0;
+	al.filtered = 0;
 
-	/* Set hierarchy info */
-	sharing_he->parent_he = primary_he;
-	sharing_he->depth = primary_he->depth + 1;
-	sharing_he->leaf = false; /* May have cacheline children */
-	sharing_he->hists = &c2c_ext.symbol_hists.hists;
-	sharing_he->filtered = false;
-	sharing_he->unfolded = false;
-	sharing_he->has_children = false; /* Will be set when cacheline entries added */
-	sharing_he->has_no_entry = false;
-	sharing_he->nr_rows = 0;
-	sharing_he->row_offset = 0;
+	/* Create sample */
+	sample.period = 1;
+	sample.weight = 1;
+	sample.ip = iaddr;
+	sample.pid = thread__pid(synthetic_thread);
+	sample.tid = thread__tid(synthetic_thread);
+	sample.cpu = 0;
 
-	/* Set statistics from aggregated stats */
-	memset(&sharing_he->stat, 0, sizeof(sharing_he->stat));
-	sharing_he->stat.nr_events = HITM_COUNT(stats) + stats->rmt_peer + stats->lcl_peer;
-	sharing_he->stat.period = sharing_he->stat.nr_events;
-	sharing_he->stat.weight1 = HITM_COUNT(stats);
+	/* Add entry - histogram handles dedup */
+	he = hists__add_entry_ops(&c2c_ext.symbol_hists.hists,
+				  &c2c_symbol_entry_ops,
+				  &al, NULL, NULL, mi,
+				  NULL, &sample, true);
 
-	/* Allocate stat_acc if needed */
-	if (symbol_conf.cumulate_callchain) {
-		sharing_he->stat_acc = calloc(1, sizeof(struct he_stat));
-		if (sharing_he->stat_acc)
-			memcpy(sharing_he->stat_acc, &sharing_he->stat, sizeof(struct he_stat));
-	}
+	addr_location__exit(&al);
+	if (mi)
+		mem_info__put(mi);
 
-	/* Initialize rb-tree and list structures */
-	sharing_he->hroot_in = RB_ROOT_CACHED;
-	sharing_he->hroot_out = RB_ROOT_CACHED;
-	INIT_LIST_HEAD(&sharing_he->pairs.node);
-	sharing_he->hpp_list = &c2c_ext.symbol_hists.list;
+	if (he)
+		he->hpp_list = &c2c_ext.symbol_hists.list;
 
-	/* Copy C2C stats */
-	memcpy(&sharing_c2c->stats, stats, sizeof(sharing_c2c->stats));
-	memcpy(&sharing_c2c->cstats, cstats, sizeof(sharing_c2c->cstats));
-
-	*out_c2c_he = sharing_c2c;
-	return sharing_he;
+	return he;
 }
 
 /**
- * build_sharing_symbols_from_cachelines - Build sharing symbol entries from cacheline details
- * @primary_he: Primary symbol histogram entry
+ * find_or_create_level2_entry - Find or create a level 2 (sharing symbol) entry
+ * @level1_c2c: Parent level 1 c2c_hist_entry
+ * @sym: Symbol for the level 2 entry
+ * @iaddr: Instruction address
+ * @detail_he: Source detail entry for attributes
  *
- * For a primary symbol, find all other symbols that share its cachelines by
- * directly scanning the cacheline detail entries. Creates sharing symbol entries
- * and their cacheline detail children.
+ * Returns: Pointer to the level 2 c2c_hist_entry, or NULL on failure
  */
-static void build_sharing_symbols_from_cachelines(struct hist_entry *primary_he)
+static struct c2c_hist_entry *
+find_or_create_level2_entry(struct c2c_hist_entry *level1_c2c,
+			    struct symbol *sym, uint64_t iaddr,
+			    struct hist_entry *detail_he)
 {
-	struct c2c_hist_entry *primary_c2c = container_of(primary_he, struct c2c_hist_entry, he);
-	struct symbol_cacheline_ref *primary_ref;
-	struct rb_root sharing_tree = RB_ROOT; /* Temp tree for deduplication */
-	uint64_t primary_iaddr;
-	int sharing_count = 0;
-
-	primary_iaddr = get_hist_entry_iaddr(primary_he);
-
-	/* For each cacheline the primary symbol accesses */
-	list_for_each_entry(primary_ref, &primary_c2c->_symbol_accessed_cachelines, list) {
-		struct c2c_hist_entry *cacheline_src_he = primary_ref->cacheline;
-		struct c2c_stats primary_cl_stats;
-		struct compute_stats primary_cl_cstats;
-		struct rb_node *nd;
-
-		/* Check if primary has HITM on this cacheline */
-		if (!aggregate_symbol_cacheline_stats(cacheline_src_he, primary_iaddr,
-						      primary_he->ms.sym, &primary_cl_stats,
-						      &primary_cl_cstats))
-			continue;
-
-		if (HITM_COUNT(&primary_cl_stats) == 0)
-			continue;
-
-		/* Scan all symbols in this cacheline's detail entries */
-		nd = rb_first_cached(&cacheline_src_he->hists->hists.entries);
-		while (nd) {
-			struct hist_entry *detail_he = rb_entry(nd, struct hist_entry, rb_node);
-			struct c2c_hist_entry *detail_c2c;
-			uint64_t detail_iaddr;
-			struct rb_node **p, *rb_parent;
-			bool found_dup = false;
-
-			if (!detail_he->ms.sym || detail_he->filtered) {
-				nd = rb_next(nd);
-				continue;
-			}
-
-			detail_c2c = container_of(detail_he, struct c2c_hist_entry, he);
-			detail_iaddr = get_hist_entry_iaddr(detail_he);
-
-			/* Skip self (same iaddr and symbol as primary) */
-			if (detail_iaddr == primary_iaddr &&
-			    symbol_name_equal(primary_he->ms.sym, detail_he->ms.sym)) {
-				nd = rb_next(nd);
-				continue;
-			}
-
-			/* Check for duplicate in our temp tree */
-			p = &sharing_tree.rb_node;
-			rb_parent = NULL;
-			while (*p) {
-				struct hist_entry *iter = rb_entry(*p, struct hist_entry, rb_node);
-				struct c2c_hist_entry *iter_c2c = container_of(iter, struct c2c_hist_entry, he);
-				uint64_t iter_iaddr = get_hist_entry_iaddr(iter);
-
-				rb_parent = *p;
-				if (detail_iaddr < iter_iaddr)
-					p = &rb_parent->rb_left;
-				else if (detail_iaddr > iter_iaddr)
-					p = &rb_parent->rb_right;
-				else if (detail_he->ms.sym < iter->ms.sym)
-					p = &rb_parent->rb_left;
-				else if (detail_he->ms.sym > iter->ms.sym)
-					p = &rb_parent->rb_right;
-				else {
-					/* Already have this sharing symbol, aggregate stats */
-					c2c_add_stats(&iter_c2c->stats, &detail_c2c->stats);
-					c2c_add_cstats(&iter_c2c->cstats, &detail_c2c->cstats);
-					iter->stat.nr_events += HITM_COUNT(&detail_c2c->stats) +
-						detail_c2c->stats.rmt_peer + detail_c2c->stats.lcl_peer;
-
-					/* Add cacheline reference if not exists */
-					add_cacheline_ref_to_symbol(iter_c2c, cacheline_src_he);
-
-					found_dup = true;
-					break;
-				}
-			}
-
-			if (!found_dup) {
-				/* Create new sharing symbol entry */
-				struct c2c_hist_entry *sharing_c2c;
-				struct hist_entry *sharing_he;
-
-				sharing_he = create_sharing_symbol_entry(primary_he, detail_he,
-									 &detail_c2c->stats,
-									 &detail_c2c->cstats,
-									 &sharing_c2c);
-				if (sharing_he) {
-					/* Initialize cacheline list and add first ref */
-					INIT_LIST_HEAD(&sharing_c2c->_symbol_accessed_cachelines);
-					add_cacheline_ref_to_symbol(sharing_c2c, cacheline_src_he);
-
-					rb_link_node(&sharing_he->rb_node, rb_parent, p);
-					rb_insert_color(&sharing_he->rb_node, &sharing_tree);
-					sharing_count++;
-				}
-			}
-
-			nd = rb_next(nd);
-		}
-	}
-
-	/* Transfer sharing symbols from temp tree to primary's hroot_out, sorted by stores
-	 * Also create cacheline detail entries for each cacheline the sharing symbol accesses
-	 */
-	while (!RB_EMPTY_ROOT(&sharing_tree)) {
-		struct rb_node *nd_sharing = rb_first(&sharing_tree);
-		struct hist_entry *sharing_he = rb_entry(nd_sharing, struct hist_entry, rb_node);
-		struct c2c_hist_entry *sharing_c2c = container_of(sharing_he, struct c2c_hist_entry, he);
-		struct symbol_cacheline_ref *cl_ref, *cl_tmp;
-		uint64_t sharing_iaddr;
-		int cacheline_count = 0;
-
-		rb_erase(nd_sharing, &sharing_tree);
-
-		/* Get sharing symbol's instruction address for stats aggregation */
-		sharing_iaddr = get_hist_entry_iaddr(sharing_he);
-
-		/* Create cacheline detail entries for each cacheline */
-		list_for_each_entry_safe(cl_ref, cl_tmp, &sharing_c2c->_symbol_accessed_cachelines, list) {
-			struct c2c_hist_entry *cacheline_detail_c2c;
-			struct hist_entry *cacheline_detail_he;
-			struct c2c_stats sharing_cl_stats;
-			struct compute_stats sharing_cl_cstats;
-
-			/* Re-aggregate sharing symbol's stats on this cacheline */
-			if (!aggregate_symbol_cacheline_stats(cl_ref->cacheline, sharing_iaddr,
-							      sharing_he->ms.sym,
-							      &sharing_cl_stats,
-							      &sharing_cl_cstats)) {
-				list_del(&cl_ref->list);
-				free(cl_ref);
-				continue;
-			}
-
-			cacheline_detail_he = create_cacheline_detail_entry(sharing_he, cl_ref->cacheline,
-									    &sharing_cl_stats, &sharing_cl_cstats,
-									    &cacheline_detail_c2c);
-			if (cacheline_detail_he) {
-				insert_cacheline_entry_sorted(&sharing_he->hroot_out, cacheline_detail_he);
-				cacheline_count++;
-			}
-
-			/* Free the cacheline ref after use */
-			list_del(&cl_ref->list);
-			free(cl_ref);
-		}
-
-		if (cacheline_count > 0) {
-			sharing_he->has_children = true;
-			sharing_he->leaf = false;
-			sharing_he->nr_rows = cacheline_count;
-		}
-
-		insert_sharing_symbol_entry_sorted(&primary_he->hroot_out, sharing_he);
-	}
-
-	if (sharing_count > 0) {
-		primary_he->has_children = true;
-		primary_he->unfolded = false;
-		primary_he->leaf = false;
-		primary_he->nr_rows = sharing_count;
-	}
-}
-
-/**
- * insert_sharing_symbol_entry_sorted - Insert sharing symbol entry sorted by stores
- * @tree: RB-tree to insert into
- * @sharing_he: Sharing symbol histogram entry to insert
- */
-static void insert_sharing_symbol_entry_sorted(struct rb_root_cached *tree,
-					       struct hist_entry *sharing_he)
-{
-	struct rb_node **p = &tree->rb_root.rb_node;
+	struct hist_entry *level1_he = &level1_c2c->he;
+	struct rb_node **p = &level1_he->hroot_out.rb_root.rb_node;
 	struct rb_node *parent = NULL;
-	struct c2c_hist_entry *sharing_c2c = container_of(sharing_he, struct c2c_hist_entry, he);
+	struct c2c_hist_entry *level2_c2c;
+	struct hist_entry *level2_he;
 	bool leftmost = true;
 
-	while (*p != NULL) {
+	/* Search for existing entry */
+	while (*p) {
 		struct hist_entry *iter = rb_entry(*p, struct hist_entry, rb_node);
-		struct c2c_hist_entry *iter_c2c = container_of(iter, struct c2c_hist_entry, he);
+		uint64_t iter_iaddr = get_hist_entry_iaddr(iter);
 
 		parent = *p;
-		if (sharing_c2c->stats.store > iter_c2c->stats.store)
+		if (iaddr < iter_iaddr) {
 			p = &parent->rb_left;
-		else {
+		} else if (iaddr > iter_iaddr) {
 			p = &parent->rb_right;
 			leftmost = false;
+		} else if (sym < iter->ms.sym) {
+			p = &parent->rb_left;
+		} else if (sym > iter->ms.sym) {
+			p = &parent->rb_right;
+			leftmost = false;
+		} else {
+			/* Found existing entry */
+			return container_of(iter, struct c2c_hist_entry, he);
 		}
 	}
 
-	rb_link_node(&sharing_he->rb_node, parent, p);
-	rb_insert_color_cached(&sharing_he->rb_node, tree, leftmost);
+	/* Create new level 2 entry */
+	level2_c2c = zalloc(sizeof(*level2_c2c));
+	if (!level2_c2c)
+		return NULL;
+
+	level2_he = &level2_c2c->he;
+
+	/* Copy base info */
+	memcpy(&level2_he->ms, &detail_he->ms, sizeof(struct map_symbol));
+
+	/* Clone mem_info */
+	if (detail_he->mem_info) {
+		level2_he->mem_info = mem_info__clone(detail_he->mem_info);
+		if (level2_he->mem_info)
+			mem_info__iaddr(level2_he->mem_info)->addr = iaddr;
+	}
+
+	/* Copy attributes */
+	level2_he->thread = detail_he->thread;
+	level2_he->cpumode = detail_he->cpumode;
+	level2_he->cpu = detail_he->cpu;
+	level2_he->socket = detail_he->socket;
+
+	/* Set hierarchy info */
+	level2_he->parent_he = level1_he;
+	level2_he->depth = 1;
+	level2_he->leaf = false;
+	level2_he->hists = &c2c_ext.symbol_hists.hists;
+	level2_he->filtered = false;
+	level2_he->unfolded = false;
+	level2_he->has_children = false;
+	level2_he->has_no_entry = false;
+	level2_he->nr_rows = 0;
+	level2_he->row_offset = 0;
+
+	/* Initialize stats */
+	memset(&level2_he->stat, 0, sizeof(level2_he->stat));
+	level2_he->hroot_in = RB_ROOT_CACHED;
+	level2_he->hroot_out = RB_ROOT_CACHED;
+	INIT_LIST_HEAD(&level2_he->pairs.node);
+	level2_he->hpp_list = &c2c_ext.symbol_hists.list;
+	if (symbol_conf.cumulate_callchain) {
+		level2_he->stat_acc = calloc(1, sizeof(struct he_stat));
+		if (!level2_he->stat_acc) {
+			if (level2_he->mem_info)
+				mem_info__put(level2_he->mem_info);
+			free(level2_c2c);
+			return NULL;
+		}
+	}
+
+	/* Initialize cstats */
+	init_stats(&level2_c2c->cstats.lcl_hitm);
+	init_stats(&level2_c2c->cstats.rmt_hitm);
+	init_stats(&level2_c2c->cstats.lcl_peer);
+	init_stats(&level2_c2c->cstats.rmt_peer);
+	init_stats(&level2_c2c->cstats.load);
+
+	/* Insert into tree */
+	rb_link_node(&level2_he->rb_node, parent, p);
+	rb_insert_color_cached(&level2_he->rb_node, &level1_he->hroot_out, leftmost);
+
+	/* Mark parent as having children */
+	level1_he->has_children = true;
+	level1_he->leaf = false;
+	level1_he->nr_rows++;
+
+	return level2_c2c;
 }
 
-
 /**
- * build_symbol_sharing_relationships - Build sharing relationships for all primary symbols
+ * find_or_create_level3_entry - Find or create a level 3 (cacheline) entry
+ * @level2_c2c: Parent level 2 c2c_hist_entry
+ * @cl_addr: Cacheline address
+ * @cacheline_src_he: Source cacheline entry for attributes
  *
- * For each primary symbol, find all other symbols that share cachelines with it
- * by directly scanning cacheline detail entries.
+ * Returns: Pointer to the level 3 c2c_hist_entry, or NULL on failure
  */
-static void build_symbol_sharing_relationships(void)
+static struct c2c_hist_entry *
+find_or_create_level3_entry(struct c2c_hist_entry *level2_c2c,
+			    uint64_t cl_addr,
+			    struct c2c_hist_entry *cacheline_src_he)
 {
-	struct rb_node *nd_primary;
+	struct hist_entry *level2_he = &level2_c2c->he;
+	struct rb_node **p = &level2_he->hroot_out.rb_root.rb_node;
+	struct rb_node *parent = NULL;
+	struct c2c_hist_entry *level3_c2c;
+	struct hist_entry *level3_he;
+	bool leftmost = true;
 
-	/* For each primary symbol, find and create sharing symbol entries */
-	nd_primary = rb_first_cached(&c2c_ext.symbol_hists.hists.entries);
-	while (nd_primary) {
-		struct hist_entry *primary_he = rb_entry(nd_primary, struct hist_entry, rb_node);
+	/* Search for existing entry */
+	while (*p) {
+		struct hist_entry *iter = rb_entry(*p, struct hist_entry, rb_node);
+		uint64_t iter_addr = 0;
 
-		/* Skip if already populated */
-		if (!RB_EMPTY_ROOT(&primary_he->hroot_out.rb_root)) {
-			nd_primary = rb_next(nd_primary);
-			continue;
+		if (iter->mem_info)
+			iter_addr = cl_address(mem_info__daddr(iter->mem_info)->addr, chk_double_cl);
+
+		parent = *p;
+		if (cl_addr < iter_addr) {
+			p = &parent->rb_left;
+		} else if (cl_addr > iter_addr) {
+			p = &parent->rb_right;
+			leftmost = false;
+		} else {
+			/* Found existing entry */
+			return container_of(iter, struct c2c_hist_entry, he);
 		}
-
-		/* Build sharing symbols directly from cacheline details */
-		build_sharing_symbols_from_cachelines(primary_he);
-
-		nd_primary = rb_next(nd_primary);
-	}
-}
-
-
-/**
- * add_cacheline_ref_to_symbol - Add cacheline reference to symbol entry if not exists
- */
-static void add_cacheline_ref_to_symbol(struct c2c_hist_entry *c2c_he,
-					struct c2c_hist_entry *cacheline_he)
-{
-	struct symbol_cacheline_ref *ref;
-
-	/* Check if already in list */
-	list_for_each_entry(ref, &c2c_he->_symbol_accessed_cachelines, list) {
-		if (ref->cacheline == cacheline_he)
-			return;
 	}
 
-	/* Add new reference */
-	ref = zalloc(sizeof(*ref));
-	if (ref) {
-		ref->cacheline = cacheline_he;
-		list_add_tail(&ref->list, &c2c_he->_symbol_accessed_cachelines);
+	/* Create new level 3 entry */
+	level3_c2c = zalloc(sizeof(*level3_c2c));
+	if (!level3_c2c)
+		return NULL;
+
+	level3_he = &level3_c2c->he;
+
+	/* Copy base info */
+	memcpy(&level3_he->ms, &cacheline_src_he->he.ms, sizeof(struct map_symbol));
+
+	/* Clone mem_info from cacheline source */
+	if (cacheline_src_he->he.mem_info)
+		level3_he->mem_info = mem_info__clone(cacheline_src_he->he.mem_info);
+
+	/* Copy attributes */
+	level3_he->thread = cacheline_src_he->he.thread;
+	level3_he->cpumode = cacheline_src_he->he.cpumode;
+	level3_he->cpu = cacheline_src_he->he.cpu;
+	level3_he->socket = cacheline_src_he->he.socket;
+
+	/* Set hierarchy info */
+	level3_he->parent_he = level2_he;
+	level3_he->depth = 2;
+	level3_he->leaf = true;
+	level3_he->hists = &c2c_ext.symbol_hists.hists;
+	level3_he->filtered = false;
+	level3_he->unfolded = false;
+	level3_he->has_children = false;
+	level3_he->has_no_entry = false;
+	level3_he->nr_rows = 0;
+	level3_he->row_offset = 0;
+
+	/* Initialize stats */
+	memset(&level3_he->stat, 0, sizeof(level3_he->stat));
+	level3_he->hroot_in = RB_ROOT_CACHED;
+	level3_he->hroot_out = RB_ROOT_CACHED;
+	INIT_LIST_HEAD(&level3_he->pairs.node);
+	level3_he->hpp_list = &c2c_ext.symbol_hists.list;
+	if (symbol_conf.cumulate_callchain) {
+		level3_he->stat_acc = calloc(1, sizeof(struct he_stat));
+		if (!level3_he->stat_acc) {
+			if (level3_he->mem_info)
+				mem_info__put(level3_he->mem_info);
+			free(level3_c2c);
+			return NULL;
+		}
 	}
+
+	/* Initialize cstats */
+	init_stats(&level3_c2c->cstats.lcl_hitm);
+	init_stats(&level3_c2c->cstats.rmt_hitm);
+	init_stats(&level3_c2c->cstats.lcl_peer);
+	init_stats(&level3_c2c->cstats.rmt_peer);
+	init_stats(&level3_c2c->cstats.load);
+
+	/* Insert into tree */
+	rb_link_node(&level3_he->rb_node, parent, p);
+	rb_insert_color_cached(&level3_he->rb_node, &level2_he->hroot_out, leftmost);
+
+	/* Mark parent as having children */
+	level2_he->has_children = true;
+	level2_he->leaf = false;
+	level2_he->nr_rows++;
+
+	return level3_c2c;
 }
 
 /**
@@ -1029,18 +819,29 @@ static uint64_t get_total_cycles_all_symbols(void)
 	return total_cycles;
 }
 
+struct processed_symbol {
+	struct symbol *sym;
+	uint64_t iaddr;
+	struct processed_symbol *next;
+};
+
 /**
- * build_symbol_hists_and_refs - Build symbol histograms and cacheline references
+ * build_symbol_view_hierarchy - Build complete 3-level symbol view hierarchy
  *
- * Single-pass algorithm using histogram's built-in deduplication:
- *   1. Single traversal of cacheline hierarchy
- *   2. Uses hists__add_entry_ops which handles dedup via sort keys
- *   3. Aggregates c2c_stats/cstats and builds cacheline references
- *   4. Calculates total cycles during this pass
+ * Single-pass algorithm that builds all three levels in one traversal:
+ *   Level 1: Primary symbols (aggregated from all cachelines)
+ *   Level 2: Sharing symbols (other symbols accessing same cachelines)
+ *   Level 3: Shared cachelines between symbol pairs
+ *
+ * For each cacheline, for each pair of symbols (A, B) accessing it:
+ *   - Find or create Level 1 entry for A
+ *   - Find or create Level 2 entry for B under A
+ *   - Find or create Level 3 entry for the cacheline under B
+ *   - Aggregate stats at all levels
  *
  * Returns: 0 on success, negative error code on failure
  */
-static int build_symbol_hists_and_refs(void)
+static int build_symbol_view_hierarchy(void)
 {
 	struct rb_node *nd_cl;
 	struct thread *synthetic_thread = NULL;
@@ -1067,12 +868,14 @@ static int build_symbol_hists_and_refs(void)
 	if (!synthetic_thread)
 		return -EINVAL;
 
-	/* Single-pass: traverse cachelines, add/aggregate symbols */
+	/* Single-pass: traverse all cachelines */
 	nd_cl = rb_first_cached(&c2c.hists.hists.entries);
 	while (nd_cl) {
 		struct hist_entry *he_cl = rb_entry(nd_cl, struct hist_entry, rb_node);
 		struct c2c_hist_entry *cacheline_he = container_of(he_cl, struct c2c_hist_entry, he);
-		struct rb_node *nd_sym;
+		struct rb_node *nd_a, *nd_b;
+		uint64_t cl_addr;
+		struct processed_symbol *processed_list = NULL;
 
 		/* Skip cachelines without HITM events */
 		if (HITM_COUNT(&cacheline_he->stats) == 0 ||
@@ -1082,87 +885,137 @@ static int build_symbol_hists_and_refs(void)
 			continue;
 		}
 
-		/* Process each symbol accessing this cacheline */
-		nd_sym = rb_first_cached(&cacheline_he->hists->hists.entries);
-		while (nd_sym) {
-			struct hist_entry *he_detail = rb_entry(nd_sym, struct hist_entry, rb_node);
-			struct c2c_hist_entry *c2c_detail = container_of(he_detail,
-									 struct c2c_hist_entry, he);
-			struct addr_location al;
-			struct perf_sample sample = {};
-			struct mem_info *mi_display;
-			struct hist_entry *he;
-			struct c2c_hist_entry *c2c_he;
-			uint64_t iaddr;
+		if (!he_cl->mem_info || !mem_info__daddr(he_cl->mem_info)) {
+			nd_cl = rb_next(nd_cl);
+			continue;
+		}
 
-			if (!he_detail->ms.sym || he_detail->filtered) {
-				nd_sym = rb_next(nd_sym);
+		cl_addr = cl_address(mem_info__daddr(he_cl->mem_info)->addr, chk_double_cl);
+
+		/* For each symbol A accessing this cacheline */
+		nd_a = rb_first_cached(&cacheline_he->hists->hists.entries);
+		while (nd_a) {
+			struct hist_entry *he_a = rb_entry(nd_a, struct hist_entry, rb_node);
+			struct c2c_hist_entry *c2c_a = container_of(he_a, struct c2c_hist_entry, he);
+			struct hist_entry *level1_he;
+			struct c2c_hist_entry *level1_c2c;
+			uint64_t iaddr_a;
+			struct processed_symbol *p;
+			bool already_processed = false;
+
+			if (!he_a->ms.sym || he_a->filtered) {
+				nd_a = rb_next(nd_a);
 				continue;
 			}
 
-			iaddr = get_hist_entry_iaddr(he_detail);
+			iaddr_a = get_hist_entry_iaddr(he_a);
 
-			/* Create mem_info for display */
-			mi_display = mem_info__new();
-			if (mi_display) {
-				mem_info__iaddr(mi_display)->addr = iaddr;
-				mem_info__iaddr(mi_display)->ms.maps = he_detail->ms.maps;
-				mem_info__iaddr(mi_display)->ms.map = he_detail->ms.map;
-				mem_info__iaddr(mi_display)->ms.sym = he_detail->ms.sym;
-				mem_info__daddr(mi_display)->addr = 0;
+			/* Find or create Level 1 entry for symbol A */
+			level1_he = find_or_create_level1_entry(he_a->ms.sym, iaddr_a,
+								he_a, synthetic_thread);
+			if (!level1_he) {
+				nd_a = rb_next(nd_a);
+				continue;
 			}
 
-			/* Create address location */
-			addr_location__init(&al);
-			al.thread = thread__get(synthetic_thread);
-			al.maps = maps__get(he_detail->ms.maps);
-			al.map = map__get(he_detail->ms.map);
-			al.sym = he_detail->ms.sym;
-			al.addr = iaddr;
-			al.level = PERF_RECORD_MISC_KERNEL;
-			al.cpumode = PERF_RECORD_MISC_KERNEL;
-			al.cpu = 0;
-			al.socket = 0;
-			al.filtered = 0;
+			level1_c2c = container_of(level1_he, struct c2c_hist_entry, he);
 
-			/* Create sample */
-			sample.period = 1;
-			sample.weight = 1;
-			sample.ip = iaddr;
-			sample.pid = thread__pid(synthetic_thread);
-			sample.tid = thread__tid(synthetic_thread);
-			sample.cpu = 0;
-
-			/*
-			 * Add entry - histogram handles dedup via sort keys.
-			 * If entry exists, it merges he_stat; we need to merge c2c_stats.
-			 */
-			he = hists__add_entry_ops(&c2c_ext.symbol_hists.hists,
-						  &c2c_symbol_entry_ops,
-						  &al, NULL, NULL, mi_display,
-						  NULL, &sample, true);
-
-			addr_location__exit(&al);
-			if (mi_display)
-				mem_info__put(mi_display);
-
-			if (he) {
-				c2c_he = container_of(he, struct c2c_hist_entry, he);
-
-				/* Aggregate C2C stats (histogram only merges he_stat) */
-				c2c_add_stats(&c2c_he->stats, &c2c_detail->stats);
-				c2c_add_cstats(&c2c_he->cstats, &c2c_detail->cstats);
-
-				/* Add cacheline reference (deduped internally) */
-				add_cacheline_ref_to_symbol(c2c_he, cacheline_he);
-
-				he->hpp_list = &c2c_ext.symbol_hists.list;
-			}
+			/* Aggregate stats for Level 1 */
+			c2c_add_stats(&level1_c2c->stats, &c2c_a->stats);
+			c2c_add_cstats(&level1_c2c->cstats, &c2c_a->cstats);
 
 			/* Accumulate to global stats */
-			c2c_add_stats(&c2c_ext.symbol_hists.stats, &c2c_detail->stats);
+			c2c_add_stats(&c2c_ext.symbol_hists.stats, &c2c_a->stats);
 
-			nd_sym = rb_next(nd_sym);
+			/* Check if we've processed this (symbol, iaddr) pair as a parent for this CL already */
+			p = processed_list;
+			while (p) {
+				if (p->sym == he_a->ms.sym && p->iaddr == iaddr_a) {
+					already_processed = true;
+					break;
+				}
+				p = p->next;
+			}
+
+			if (already_processed) {
+				nd_a = rb_next(nd_a);
+				continue;
+			}
+
+			/* Add to processed list */
+			p = zalloc(sizeof(*p));
+			if (p) {
+				p->sym = he_a->ms.sym;
+				p->iaddr = iaddr_a;
+				p->next = processed_list;
+				processed_list = p;
+			}
+
+			/* For each other symbol B on the same cacheline */
+			nd_b = rb_first_cached(&cacheline_he->hists->hists.entries);
+			while (nd_b) {
+				struct hist_entry *he_b = rb_entry(nd_b, struct hist_entry, rb_node);
+				struct c2c_hist_entry *c2c_b = container_of(he_b, struct c2c_hist_entry, he);
+				struct c2c_hist_entry *level2_c2c, *level3_c2c;
+				uint64_t iaddr_b;
+
+				if (!he_b->ms.sym || he_b->filtered) {
+					nd_b = rb_next(nd_b);
+					continue;
+				}
+
+				iaddr_b = get_hist_entry_iaddr(he_b);
+
+				/* Skip self */
+				if (iaddr_a == iaddr_b &&
+				    symbol_name_equal(he_a->ms.sym, he_b->ms.sym)) {
+					nd_b = rb_next(nd_b);
+					continue;
+				}
+
+				/* Find or create Level 2 entry for symbol B under A */
+				level2_c2c = find_or_create_level2_entry(level1_c2c,
+									 he_b->ms.sym, iaddr_b, he_b);
+				if (!level2_c2c) {
+					nd_b = rb_next(nd_b);
+					continue;
+				}
+
+				/* Aggregate stats for Level 2 */
+				c2c_add_stats(&level2_c2c->stats, &c2c_b->stats);
+				c2c_add_cstats(&level2_c2c->cstats, &c2c_b->cstats);
+				if (!hist_entry__add_c2c_stats(&level2_c2c->he, &c2c_b->stats)) {
+					nd_b = rb_next(nd_b);
+					continue;
+				}
+
+				/* Find or create Level 3 entry for cacheline under B */
+				level3_c2c = find_or_create_level3_entry(level2_c2c, cl_addr,
+									 cacheline_he);
+				if (!level3_c2c) {
+					nd_b = rb_next(nd_b);
+					continue;
+				}
+
+				/* Aggregate stats for Level 3 */
+				c2c_add_stats(&level3_c2c->stats, &c2c_b->stats);
+				c2c_add_cstats(&level3_c2c->cstats, &c2c_b->cstats);
+				if (!hist_entry__add_c2c_stats(&level3_c2c->he, &c2c_b->stats)) {
+					nd_b = rb_next(nd_b);
+					continue;
+				}
+
+				nd_b = rb_next(nd_b);
+			}
+
+			nd_a = rb_next(nd_a);
+		}
+
+		/* Free processed list */
+		while (processed_list) {
+			struct processed_symbol *n = processed_list->next;
+			free(processed_list);
+			processed_list = n;
 		}
 
 		nd_cl = rb_next(nd_cl);
@@ -1187,38 +1040,6 @@ static int build_symbol_hists_and_refs(void)
 	c2c_ext.symbol_hists.hists.symbol_filter_str = NULL;
 	c2c_ext.symbol_hists.hists.socket_filter = -1;
 	c2c_ext.symbol_hists.hists.nr_hpp_node = 0;
-
-	return 0;
-}
-
-/* ============================================================================
- * Main Entry Point: Build Complete Symbol View Hierarchy
- * ============================================================================ */
-
-/**
- * build_symbol_view_hierarchy - Build complete 4-level symbol view hierarchy
- *
- * Optimized 2-phase algorithm:
- *   Phase 1: Single traversal with temporary tree for symbol aggregation + cacheline refs
- *   Phase 2: Build parent-child-grandchild relationships using the reference lists
- *
- * This approach ensures proper deduplication while minimizing traversal count.
- *
- * Returns: 0 on success, negative error code on failure
- */
-static int build_symbol_view_hierarchy(void)
-{
-	int ret;
-
-	/* Phase 1: Build primary symbol entries with stats aggregation and cacheline references.
-	 * Also pre-computes total cycles during this pass.
-	 */
-	ret = build_symbol_hists_and_refs();
-	if (ret)
-		return ret;
-
-	/* Phase 2: Build sharing symbol and cacheline detail relationships */
-	build_symbol_sharing_relationships();
 
 	return 0;
 }
@@ -1356,7 +1177,7 @@ int perf_c2c__browse_symbol_view(struct hists *hists)
 	" e/+             Expand/collapse related symbols\n"
 	" q             Quit\n";
 
-	/* Build complete symbol view hierarchy (4 steps) */
+	/* Build complete symbol view hierarchy (single pass) */
 	ret = build_symbol_view_hierarchy();
 	if (ret) {
 		ui__error("Failed to build symbol view hierarchy (ret=%d)\n", ret);

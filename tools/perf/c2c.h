@@ -31,20 +31,11 @@ struct c2c_hist_entry {
 	bool			 paddr_zero;
 	char			*nodestr;
 
-	/* Symbol view: list of accessed cachelines (references only) */
-	struct list_head	 _symbol_accessed_cachelines;
-
 	/*
 	 * must be at the end,
 	 * because of its callchain dynamic entry
 	 */
 	struct hist_entry	he;
-};
-
-/** Reference to a cacheline accessed by a symbol (avoids data duplication) */
-struct symbol_cacheline_ref {
-	struct list_head	 list;
-	struct c2c_hist_entry	*cacheline;
 };
 
 struct perf_c2c {
