@@ -1,0 +1,108 @@
+name: Sync with Upstream Linux Kernel
+
+on:
+  schedule:
+    # Check for new RC tags every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  sync-upstream:
+    runs-on: self-hosted
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0 # Full history needed for rebasing
+    
+    - name: Configure Git
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+    
+    - name: Add upstream remote
+      run: |
+        git remote add upstream https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git || true
+        git remote set-url upstream https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+    
+    - name: Fetch upstream tags
+      run: |
+        git fetch upstream --tags
+    
+    - name: Find latest RC tag
+      id: latest-rc
+      run: |
+        # Get the latest RC tag (e.g., v6.7-rc1, v6.7-rc2, etc.)
+        LATEST_RC=$(git tag -l "v*-rc*" | sort -V | tail -1)
+        echo "latest_rc=$LATEST_RC" >> $GITHUB_OUTPUT
+        echo "Latest RC tag: $LATEST_RC"
+    
+    - name: Check if we need to update
+      id: check-update
+      run: |
+        LATEST_RC="${{ steps.latest-rc.outputs.latest_rc }}"
+        
+        # Check if this RC tag already exists in our main branch
+        if git merge-base --is-ancestor "$LATEST_RC" HEAD; then
+          echo "Already up to date with $LATEST_RC"
+          echo "needs_update=false" >> $GITHUB_OUTPUT
+        else
+          echo "Need to update to $LATEST_RC"
+          echo "needs_update=true" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Rebase to latest RC
+      if: steps.check-update.outputs.needs_update == 'true'
+      run: |
+        LATEST_RC="${{ steps.latest-rc.outputs.latest_rc }}"
+        echo "Rebasing main branch to $LATEST_RC"
+        
+        # Create a backup branch
+        git branch backup-before-rebase-$(date +%Y%m%d-%H%M%S)
+        
+        # Rebase main to the latest RC tag
+        git rebase "$LATEST_RC"
+    
+    - name: Push updated main branch
+      if: steps.check-update.outputs.needs_update == 'true'
+      run: |
+        LATEST_RC="${{ steps.latest-rc.outputs.latest_rc }}"
+        git push origin main --force-with-lease
+        
+        # Create a release/tag for tracking
+        git tag "synced-to-$LATEST_RC" -m "Synced to upstream $LATEST_RC"
+        git push origin "synced-to-$LATEST_RC"
+    
+    - name: Create Issue on Rebase Failure
+      if: failure() && steps.check-update.outputs.needs_update == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const title = `Failed to rebase to ${{ steps.latest-rc.outputs.latest_rc }}`;
+          const body = `The automatic rebase to upstream tag ${{ steps.latest-rc.outputs.latest_rc }} failed. 
+          
+          This likely means there are conflicts that need manual resolution.
+          
+          Please check the [failed workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.`;
+          
+          github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['automation', 'rebase-failure']
+          });
+
+    - name: Create Success Issue
+      if: steps.check-update.outputs.needs_update == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `Successfully synced to ${{ steps.latest-rc.outputs.latest_rc }}`,
+            body: `Repository has been successfully rebased to upstream tag ${{ steps.latest-rc.outputs.latest_rc }}.`,
+            labels: ['automation', 'sync-success']
+          });	
