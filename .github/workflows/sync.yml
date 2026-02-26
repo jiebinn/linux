@@ -69,8 +69,10 @@ jobs:
         LATEST_RC="${{ steps.latest-rc.outputs.latest_rc }}"
         echo "Rebasing main branch to $LATEST_RC"
         
-        # Create a backup branch
-        git branch backup-before-rebase-$(date +%Y%m%d-%H%M%S)
+        # Create a backup branch and push it to origin so it is recoverable after the force-push
+        BACKUP_BRANCH="backup-before-rebase-$(date +%Y%m%d-%H%M%S)"
+        git branch "$BACKUP_BRANCH"
+        git push origin "$BACKUP_BRANCH"
         
         # Rebase main to the latest RC tag
         git rebase "$LATEST_RC"
