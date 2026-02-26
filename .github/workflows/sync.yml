@@ -38,6 +38,10 @@ jobs:
       run: |
         # Get the latest RC tag (e.g., v6.7-rc1, v6.7-rc2, etc.)
         LATEST_RC=$(git tag -l "v*-rc*" | sort -V | tail -1)
+        if [ -z "$LATEST_RC" ]; then
+          echo "Error: No RC tags found (LATEST_RC is empty). Ensure upstream tags are fetched correctly." >&2
+          exit 1
+        fi
         echo "latest_rc=$LATEST_RC" >> $GITHUB_OUTPUT
         echo "Latest RC tag: $LATEST_RC"
     
