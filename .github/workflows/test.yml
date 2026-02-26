@@ -25,5 +25,9 @@ jobs:
     - name: make
       run: make
 
+  review:
+    runs-on: self-hosted
+
+    steps:
     - uses: intel-innersource/frameworks.actions.gnai.agentic-code-review@v1
 
