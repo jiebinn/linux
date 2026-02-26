@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   summarize:
-    runs-on: sandbox.prod.amr.k8s
+    runs-on:
+      group: arc-prod-blue
     steps:
     - uses: intel-innersource/frameworks.actions.gnai.summarize-errors@main
