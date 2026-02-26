@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   review:
-    runs-on: self-hosted
+    runs-on: sandbox.prod.amr.k8s
 
     steps:
     - uses: intel-innersource/frameworks.actions.gnai.agentic-code-review@v1
