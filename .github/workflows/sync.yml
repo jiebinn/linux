@@ -81,24 +81,24 @@ jobs:
         git tag "synced-to-$LATEST_RC" -m "Synced to upstream $LATEST_RC"
         git push origin "synced-to-$LATEST_RC"
     
-    - name: Create Issue on Rebase Failure
+    - name: Create Issue on Sync Failure
       if: failure() && steps.check-update.outputs.needs_update == 'true'
       uses: actions/github-script@v7
       with:
         script: |
-          const title = `Failed to rebase to ${{ steps.latest-rc.outputs.latest_rc }}`;
-          const body = `The automatic rebase to upstream tag ${{ steps.latest-rc.outputs.latest_rc }} failed. 
+          const title = `Upstream sync to ${{ steps.latest-rc.outputs.latest_rc }} failed`;
+          const body = `The automated sync to upstream tag ${{ steps.latest-rc.outputs.latest_rc }} failed.
           
-          This likely means there are conflicts that need manual resolution.
+          This may be due to rebase conflicts, push or tag permission issues, or other errors in the sync workflow.
           
-          Please check the [failed workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.`;
+          Please check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.`;
           
           github.rest.issues.create({
             owner: context.repo.owner,
             repo: context.repo.repo,
             title: title,
             body: body,
-            labels: ['automation', 'rebase-failure']
+            labels: ['automation', 'sync-failure']
           });
 
     - name: Create Success Issue
