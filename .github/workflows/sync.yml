@@ -78,7 +78,7 @@ jobs:
         git rebase "$LATEST_RC"
     
     - name: Push updated main branch
-      if: steps.check-update.outputs.needs_update == 'true'
+      if: success() && steps.check-update.outputs.needs_update == 'true'
       run: |
         LATEST_RC="${{ steps.latest-rc.outputs.latest_rc }}"
         git push origin main --force-with-lease
