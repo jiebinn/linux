@@ -1,4 +1,4 @@
-name: Test Workflow
+name: Review Workflow
 
 on:
   pull_request:
@@ -13,18 +13,6 @@ permissions:
   id-token: write
 
 jobs:
-  build:
-    runs-on: self-hosted
-
-    steps:
-    - uses: actions/checkout@v6
-
-    - name: config
-      run: make defconfig
-
-    - name: make
-      run: make
-
   review:
     runs-on: self-hosted
 

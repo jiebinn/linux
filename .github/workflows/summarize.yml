@@ -1,7 +1,7 @@
 name: Summarize Errors
 on:
   workflow_run:
-    workflows: [Test Workflow]
+    workflows: [Review Workflow]
     types:
       - completed
 
