@@ -14,7 +14,9 @@ permissions:
 
 jobs:
   review:
-    runs-on: self-hosted
+    runs-on:
+      group: arc-prod-blue
+
     steps:
     - uses: intel-innersource/frameworks.actions.gnai.agentic-code-review@v1
 
