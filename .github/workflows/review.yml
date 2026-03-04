@@ -18,6 +18,17 @@ jobs:
       group: arc-prod-blue
 
     steps:
-    - uses: actions/checkout@v6
-    - uses: intel-innersource/frameworks.actions.gnai.agentic-code-review@v1
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Checkout prompts repo
+      uses: actions/checkout@v6
+      with:
+        repository: 'masoncl/review-prompts'
+        path: 'review'
+
+    - name: Run GNAI review
+      uses: intel-innersource/frameworks.actions.gnai.agentic-code-review@v1
+      with:
+        review-instructions-file: review/kernel/review-core.md
 
