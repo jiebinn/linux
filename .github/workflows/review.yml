@@ -28,7 +28,16 @@ jobs:
         path: 'review'
 
     - name: Run GNAI review
+      id: review
       uses: intel-innersource/frameworks.actions.gnai.agentic-code-review@v1
       with:
+        execution-log-path: ${{ github.workspace }}/review-log.json
         review-instructions-file: .github/code-review-instructions.md
+
+    - name: Upload review artifacts
+      uses: actions/upload-artifact@v4
+      if: always() && steps.review.outputs.execution-file
+      with:
+        name: review-execution-log
+        path: ${{ steps.review.outputs.execution-file }}
 
