@@ -12,7 +12,8 @@ concurrency:
 
 jobs:
   sync-upstream:
-    runs-on: arc-prod-blue
+    runs-on:
+      group: arc-prod-blue
     permissions:
       contents: write
       issues: write
