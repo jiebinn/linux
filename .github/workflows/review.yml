@@ -2,10 +2,6 @@ name: Review Workflow
 
 on:
   pull_request:
-    branches:
-    - main
-    - linus
-    - test
 
 permissions:
   contents: read
