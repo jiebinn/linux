@@ -2,7 +2,7 @@ name: Sync with Upstream Linux Kernel
 
 on:
   schedule:
-    # Check for new RC tags every 6 hours
+    # Check for new upstream tags every 6 hours
     - cron: '0 */6 * * *'
   workflow_dispatch: # Allow manual triggering
 
@@ -38,63 +38,71 @@ jobs:
       run: |
         git fetch upstream --tags
     
-    - name: Find latest RC tag
-      id: latest-rc
+    - name: Find latest upstream tag
+      id: latest-tag
       run: |
-        # Get the latest RC tag (e.g., v6.7-rc1, v6.7-rc2, etc.)
-        LATEST_RC=$(git tag -l "v*-rc*" | sort -V | tail -1)
-        if [ -z "$LATEST_RC" ]; then
-          echo "Error: No RC tags found (LATEST_RC is empty). Ensure upstream tags are fetched correctly." >&2
+        # Pick the most recently created valid upstream kernel tag. This lets us
+        # follow whichever release happened last, whether stable (v7.0) or RC
+        # (v7.0-rc1, v7.1-rc1, etc.).
+        LATEST_TAG=$(git for-each-ref \
+          --sort=-creatordate \
+          --format='%(refname:strip=2)' \
+          refs/tags/v* | \
+          grep -E '^v[0-9]+\.[0-9]+(\.[0-9]+)?(-rc[0-9]+)?$' | \
+          head -1)
+
+        if [ -z "$LATEST_TAG" ]; then
+          echo "Error: No valid upstream kernel tags found." >&2
           exit 1
         fi
-        echo "latest_rc=$LATEST_RC" >> $GITHUB_OUTPUT
-        echo "Latest RC tag: $LATEST_RC"
+        echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+        echo "Latest upstream tag: $LATEST_TAG"
     
     - name: Check if we need to update
       id: check-update
       run: |
-        LATEST_RC="${{ steps.latest-rc.outputs.latest_rc }}"
+        LATEST_TAG="${{ steps.latest-tag.outputs.latest_tag }}"
         
-        # Check if this RC tag already exists in our main branch
-        if git merge-base --is-ancestor "$LATEST_RC" HEAD; then
-          echo "Already up to date with $LATEST_RC"
+        # Check if this tag already exists in our main branch
+        if git merge-base --is-ancestor "$LATEST_TAG" HEAD; then
+          echo "Already up to date with $LATEST_TAG"
           echo "needs_update=false" >> $GITHUB_OUTPUT
         else
-          echo "Need to update to $LATEST_RC"
+          echo "Need to update to $LATEST_TAG"
           echo "needs_update=true" >> $GITHUB_OUTPUT
         fi
     
-    - name: Rebase to latest RC
+    - name: Rebase to latest upstream tag
       if: steps.check-update.outputs.needs_update == 'true'
       run: |
-        LATEST_RC="${{ steps.latest-rc.outputs.latest_rc }}"
-        echo "Rebasing main branch to $LATEST_RC"
+        LATEST_TAG="${{ steps.latest-tag.outputs.latest_tag }}"
+        echo "Rebasing main branch to $LATEST_TAG"
         
         # Create a backup branch and push it to origin so it is recoverable after the force-push
         BACKUP_BRANCH="backup-before-rebase-$(date +%Y%m%d-%H%M%S)"
         git branch "$BACKUP_BRANCH"
         git push origin "$BACKUP_BRANCH"
         
-        # Rebase main to the latest RC tag
-        git rebase "$LATEST_RC"
+        # Rebase main to the latest upstream tag
+        git rebase "$LATEST_TAG"
     
     - name: Push updated main branch
       if: success() && steps.check-update.outputs.needs_update == 'true'
       run: |
-        LATEST_RC="${{ steps.latest-rc.outputs.latest_rc }}"
+        LATEST_TAG="${{ steps.latest-tag.outputs.latest_tag }}"
         git push origin main --force-with-lease
         
         # Create a release/tag for tracking
-        git tag "synced-to-$LATEST_RC" -m "Synced to upstream $LATEST_RC"
-        git push origin "synced-to-$LATEST_RC"
+        git tag "synced-to-$LATEST_TAG" -m "Synced to upstream $LATEST_TAG"
+        git push origin "synced-to-$LATEST_TAG"
     
     - name: Create Issue on Sync Failure
       if: failure() && steps.check-update.outputs.needs_update == 'true'
       uses: actions/github-script@v7
       with:
         script: |
-          const title = `Upstream sync to ${{ steps.latest-rc.outputs.latest_rc }} failed`;
-          const body = `The automated sync to upstream tag ${{ steps.latest-rc.outputs.latest_rc }} failed.
+          const title = `Upstream sync to ${{ steps.latest-tag.outputs.latest_tag }} failed`;
+          const body = `The automated sync to upstream tag ${{ steps.latest-tag.outputs.latest_tag }} failed.
           
           This may be due to rebase conflicts, push or tag permission issues, or other errors in the sync workflow.
           
@@ -116,7 +124,7 @@ jobs:
           github.rest.issues.create({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            title: `Successfully synced to ${{ steps.latest-rc.outputs.latest_rc }}`,
-            body: `Repository has been successfully rebased to upstream tag ${{ steps.latest-rc.outputs.latest_rc }}.`,
+            title: `Successfully synced to ${{ steps.latest-tag.outputs.latest_tag }}`,
+            body: `Repository has been successfully rebased to upstream tag ${{ steps.latest-tag.outputs.latest_tag }}.`,
             labels: ['automation', 'sync-success']
           });	
