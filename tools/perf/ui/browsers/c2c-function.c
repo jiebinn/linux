@@ -324,6 +324,58 @@ cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 	return ret;
 }
 
+/*
+ * cycles_percent_cmp - Comparison function for cycles percentage sorting
+ */
+__maybe_unused
+static int64_t
+cycles_percent_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
+		   struct hist_entry *left, struct hist_entry *right)
+{
+	struct c2c_hist_entry *c2c_left = container_of(left, struct c2c_hist_entry, he);
+	struct c2c_hist_entry *c2c_right = container_of(right, struct c2c_hist_entry, he);
+	u64 cycles_left = c2c_hist_entry__cycles(c2c_left);
+	u64 cycles_right = c2c_hist_entry__cycles(c2c_right);
+
+	return (cycles_left > cycles_right) - (cycles_left < cycles_right);
+}
+
+/*
+ * iaddr_symbol_cmp - Comparison function for instruction address sorting
+ */
+__maybe_unused
+static int64_t
+iaddr_symbol_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
+		 struct hist_entry *left, struct hist_entry *right)
+{
+	return sort__iaddr_cmp(left, right);
+}
+
+__maybe_unused
+static int64_t
+empty_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
+	  struct hist_entry *left __maybe_unused,
+	  struct hist_entry *right __maybe_unused)
+{
+	return 0;
+}
+
+/*
+ * total_stores_cmp - Comparison function for total stores sorting
+ */
+__maybe_unused
+static int64_t
+total_stores_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
+		 struct hist_entry *left, struct hist_entry *right)
+{
+	struct c2c_hist_entry *c2c_left = container_of(left, struct c2c_hist_entry, he);
+	struct c2c_hist_entry *c2c_right = container_of(right, struct c2c_hist_entry, he);
+	u64 left_store = (u64)c2c_left->stats.store;
+	u64 right_store = (u64)c2c_right->stats.store;
+
+	return (left_store > right_store) - (left_store < right_store);
+}
+
 int perf_c2c__browse_function_view(struct hists *hists __maybe_unused)
 {
 	return 0;
