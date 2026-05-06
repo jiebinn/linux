@@ -417,7 +417,6 @@ static struct c2c_dimension *function_view_dimensions[] = {
 	NULL,
 };
 
-__maybe_unused
 static struct c2c_dimension *get_function_dimension(const char *name)
 {
 	unsigned int i;
@@ -432,7 +431,6 @@ static struct c2c_dimension *get_function_dimension(const char *name)
 	return NULL;
 }
 
-__maybe_unused
 static struct c2c_fmt *get_function_format(const char *name)
 {
 	struct c2c_dimension *dim = get_function_dimension(name);
@@ -463,6 +461,117 @@ static struct c2c_fmt *get_function_format(const char *name)
 	fmt->free	= fmt_free;
 
 	return c2c_fmt;
+}
+
+static int
+c2c_function_hists__init_output(struct perf_hpp_list *hpp_list, char *name,
+				struct perf_env *env __maybe_unused)
+{
+	struct c2c_fmt *c2c_fmt = get_function_format(name);
+	int level = 0;
+
+	if (!c2c_fmt) {
+		reset_dimensions();
+		return output_field_add(hpp_list, name, &level);
+	}
+
+	perf_hpp_list__column_register(hpp_list, &c2c_fmt->fmt);
+	return 0;
+}
+
+static int
+c2c_function_hists__init_sort(struct perf_hpp_list *hpp_list, char *name,
+			      struct perf_env *env)
+{
+	struct c2c_fmt *c2c_fmt = get_function_format(name);
+
+	if (!c2c_fmt) {
+		reset_dimensions();
+		return sort_dimension__add(hpp_list, name, /*evlist=*/NULL, env, /*level=*/0);
+	}
+
+	perf_hpp_list__register_sort_field(hpp_list, &c2c_fmt->fmt);
+	return 0;
+}
+
+typedef int (*hpp_list_add_fn)(struct perf_hpp_list *hpp_list, char *name,
+			       struct perf_env *env);
+
+static int function_hpp_list__add_tokens(struct perf_hpp_list *hpp_list, char *list,
+					 struct perf_env *env, hpp_list_add_fn add)
+{
+	char *tok;
+	int ret;
+
+	if (!list)
+		return 0;
+
+	for (tok = strtok(list, ","); tok; tok = strtok(NULL, ",")) {
+		ret = add(hpp_list, tok, env);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
+static int
+function_hpp_list__parse(struct perf_hpp_list *hpp_list,
+			 const char *output_str,
+			 const char *sort_str,
+			 struct perf_env *env)
+{
+	char *output = output_str ? strdup(output_str) : NULL;
+	char *sort   = sort_str   ? strdup(sort_str)   : NULL;
+	int ret = 0;
+
+	if ((output_str && !output) || (sort_str && !sort)) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = function_hpp_list__add_tokens(hpp_list, output, env,
+					    c2c_function_hists__init_output);
+	if (ret)
+		goto out;
+
+	ret = function_hpp_list__add_tokens(hpp_list, sort, env,
+					    c2c_function_hists__init_sort);
+	if (ret)
+		goto out;
+
+	perf_hpp__setup_output_field(hpp_list);
+out:
+	free(output);
+	free(sort);
+	return ret;
+}
+
+__maybe_unused
+static int
+c2c_function_hists__init(struct c2c_hists *hists,
+			 const char *sort,
+			 int nr_header_lines,
+			 struct perf_env *env)
+{
+	__hists__init(&hists->hists, &hists->list);
+
+	perf_hpp_list__init(&hists->list);
+
+	hists->list.nr_header_lines = nr_header_lines;
+
+	return function_hpp_list__parse(&hists->list, /*output=*/NULL, sort, env);
+}
+
+__maybe_unused
+static int
+c2c_function_hists__reinit(struct c2c_hists *c2c_hists,
+			   const char *output,
+			   const char *sort,
+			   struct perf_env *env)
+{
+	perf_hpp__reset_output_field(&c2c_hists->list);
+	INIT_LIST_HEAD(&c2c_hists->list.sorts);
+	return function_hpp_list__parse(&c2c_hists->list, output, sort, env);
 }
 
 int perf_c2c__browse_function_view(struct hists *hists __maybe_unused)
