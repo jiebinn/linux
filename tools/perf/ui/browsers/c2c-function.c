@@ -37,6 +37,39 @@
 #include "../../c2c.h"
 #include "hists.h"
 
+struct perf_c2c_ext {
+	struct c2c_hists	function_hists;
+	/* Cached across all level-1 entries; 0 means "not yet computed". */
+	u64			total_cycles;
+};
+
+static struct perf_c2c_ext c2c_ext __maybe_unused;
+
+struct c2c_function_browser {
+	struct hist_browser	hb;
+	struct hists		*hists;
+};
+
+__maybe_unused
+static inline u64 c2c_hitm_count(const struct c2c_stats *stats)
+{
+	return stats->rmt_hitm + stats->lcl_hitm;
+}
+
+__maybe_unused
+static inline bool symbol_name_equal(struct symbol *a, struct symbol *b)
+{
+	return a && b && strcmp(a->name, b->name) == 0;
+}
+
+__maybe_unused
+static inline u64 hist_entry__iaddr(struct hist_entry *he)
+{
+	if (he->mem_info)
+		return mem_info__iaddr(he->mem_info)->addr;
+	return he->ms.sym ? he->ms.sym->start : 0;
+}
+
 int perf_c2c__browse_function_view(struct hists *hists __maybe_unused)
 {
 	return 0;
