@@ -574,6 +574,145 @@ c2c_function_hists__reinit(struct c2c_hists *c2c_hists,
 	return function_hpp_list__parse(&c2c_hists->list, output, sort, env);
 }
 
+/* Welford online merge of two "stats" (from util/stat.h) accumulators. */
+static void c2c_stats_merge(struct stats *dest, struct stats *src)
+{
+	double delta;
+
+	if (src->n == 0)
+		return;
+
+	if (dest->n == 0) {
+		*dest = *src;
+		return;
+	}
+
+	delta = src->mean - dest->mean;
+	dest->M2 += src->M2 + delta * delta * dest->n * src->n / (dest->n + src->n);
+	dest->mean = (dest->mean * dest->n + src->mean * src->n) / (dest->n + src->n);
+	dest->n += src->n;
+
+	/* Update min/max */
+	if (src->max > dest->max)
+		dest->max = src->max;
+	if (src->min < dest->min)
+		dest->min = src->min;
+}
+
+/* Merge compute_stats during function aggregation. */
+__maybe_unused
+static void c2c_add_cstats(struct compute_stats *dest, struct compute_stats *src)
+{
+	c2c_stats_merge(&dest->rmt_hitm, &src->rmt_hitm);
+	c2c_stats_merge(&dest->lcl_hitm, &src->lcl_hitm);
+	c2c_stats_merge(&dest->rmt_peer, &src->rmt_peer);
+	c2c_stats_merge(&dest->lcl_peer, &src->lcl_peer);
+	c2c_stats_merge(&dest->load, &src->load);
+}
+
+__maybe_unused
+static bool hist_entry__add_c2c_stats(struct hist_entry *he, struct c2c_stats *stats)
+{
+	u64 nr_events = c2c_hitm_count(stats) + stats->rmt_peer + stats->lcl_peer;
+	u64 weight1 = c2c_hitm_count(stats);
+
+	he->stat.nr_events += nr_events;
+	he->stat.period += nr_events;
+	he->stat.weight1 += weight1;
+
+	if (!symbol_conf.cumulate_callchain)
+		return true;
+
+	if (!he->stat_acc) {
+		he->stat_acc = calloc(1, sizeof(struct he_stat));
+		if (!he->stat_acc)
+			return false;
+	}
+
+	he->stat_acc->nr_events += nr_events;
+	he->stat_acc->period += nr_events;
+	he->stat_acc->weight1 += weight1;
+
+	return true;
+}
+
+static void c2c_he__free_hierarchy(struct hist_entry *he);
+
+/*
+ * Free a function-view histogram entry (hist_entry_ops::free).
+ */
+static void c2c_function_he_free(void *ptr)
+{
+	struct hist_entry *he = ptr;
+	struct c2c_hist_entry *c2c_he;
+
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
+
+	if (c2c_he->hists) {
+		hists__delete_entries(&c2c_he->hists->hists);
+		zfree(&c2c_he->hists);
+	}
+
+	c2c_he__free_hierarchy(he);
+
+	zfree(&c2c_he->nodeset);
+	zfree(&c2c_he->cpuset);
+	zfree(&c2c_he->nodestr);
+	zfree(&c2c_he->node_stats);
+
+	free(c2c_he);
+}
+
+/*
+ * Free all child entries under @he, recursively (hroot_out sub-tree).
+ */
+static void c2c_he__free_hierarchy(struct hist_entry *he)
+{
+	struct rb_node *nd;
+	struct hist_entry *child_he;
+	struct c2c_hist_entry *child_c2c;
+
+	if (RB_EMPTY_ROOT(&he->hroot_out.rb_root))
+		return;
+
+	nd = rb_first_cached(&he->hroot_out);
+	while (nd) {
+		struct rb_node *next = rb_next(nd);
+
+		child_he = rb_entry(nd, struct hist_entry, rb_node);
+		child_c2c = container_of(child_he, struct c2c_hist_entry, he);
+
+		if (child_he->stat_acc)
+			zfree(&child_he->stat_acc);
+
+		if (child_he->mem_info)
+			mem_info__put(child_he->mem_info);
+
+		if (child_c2c->hists) {
+			hists__delete_entries(&child_c2c->hists->hists);
+			zfree(&child_c2c->hists);
+		}
+
+		zfree(&child_c2c->cpuset);
+		zfree(&child_c2c->nodeset);
+		zfree(&child_c2c->nodestr);
+		zfree(&child_c2c->node_stats);
+
+		c2c_he__free_hierarchy(child_he);
+
+		rb_erase_cached(&child_he->rb_node, &he->hroot_out);
+		free(child_c2c);
+
+		nd = next;
+	}
+}
+
+/* Entry operations for function view */
+static struct hist_entry_ops c2c_function_entry_ops __maybe_unused = {
+	.new	= c2c_he_zalloc,
+	.free	= c2c_function_he_free,
+};
+
 int perf_c2c__browse_function_view(struct hists *hists __maybe_unused)
 {
 	return 0;
