@@ -184,6 +184,146 @@ static u64 hist_entry__child_stores(struct hist_entry *he)
 	return sum;
 }
 
+__maybe_unused
+static int
+total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		   struct hist_entry *he)
+{
+	struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
+	int width = c2c_width(fmt, hpp, he->hists);
+	u64 total;
+
+	/* L1 shows the sum of sharing-function stores; L2/L3 show their own. */
+	total = he->parent_he ? (u64)c2c_he->stats.store : hist_entry__child_stores(he);
+
+	return scnprintf(hpp->buf, hpp->size, "%*" PRIu64, width, total);
+}
+
+/*
+ * cacheline_symbol_entry - Render cacheline address for function view
+ */
+__maybe_unused
+static int
+cacheline_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		       struct hist_entry *he)
+{
+	int width = c2c_width(fmt, hpp, he->hists);
+	char buf[24];
+	u64 addr;
+
+	/* Only show the address on level-3 (leaf) cacheline entries. */
+	if (he->depth < 2 || !he->leaf || !he->mem_info)
+		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+
+	addr = cl_address(mem_info__daddr(he->mem_info)->addr, chk_double_cl);
+	scnprintf(buf, sizeof(buf), "0x%" PRIx64, addr);
+
+	return scnprintf(hpp->buf, hpp->size, "%*s", width, buf);
+}
+
+/* Render the code (instruction) address for level-1 and level-2 entries. */
+__maybe_unused
+static int
+iaddr_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		   struct hist_entry *he)
+{
+	int width = c2c_width(fmt, hpp, he->hists);
+	int iaddr_width, ret;
+	char buf[24];
+	u64 addr = 0;
+
+	/* Hide for cacheline (level-3) entries. */
+	if (he->parent_he && he->parent_he->parent_he)
+		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+
+	if (he->mem_info)
+		addr = mem_info__iaddr(he->mem_info)->addr;
+
+	ret = scnprintf(hpp->buf, hpp->size, "%s", he->unfolded ? "- " : "+ ");
+	advance_hpp(hpp, ret);
+
+	iaddr_width = width - ret;
+	if (iaddr_width <= 0)
+		return ret;
+
+	scnprintf(buf, sizeof(buf), "0x%" PRIx64, addr);
+	ret += scnprintf(hpp->buf, hpp->size, "%*.*s", iaddr_width, iaddr_width, buf);
+	return ret;
+}
+
+/*
+ * symbol_view_entry - Render symbol name for function view with expansion indicators
+ */
+__maybe_unused
+static int
+symbol_view_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		  struct hist_entry *he)
+{
+	int width = c2c_width(fmt, hpp, he->hists);
+	int sym_width;
+	int ret;
+	char symbuf[512];
+	const char *prefix;
+
+	/* Hide Symbol for cacheline entries */
+	if (he->parent_he && he->parent_he->parent_he)
+		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+
+	prefix = he->unfolded ? "- " : "+ ";
+
+	ret = scnprintf(hpp->buf, hpp->size, "%s", prefix);
+	advance_hpp(hpp, ret);
+
+	sym_width = width - ret;
+
+	if (sym_width <= 0)
+		return ret;
+
+	if (sort_sym.se_snprintf) {
+		sort_sym.se_snprintf(he, symbuf, sizeof(symbuf), sym_width);
+	} else {
+		const char *name = he->ms.sym ? he->ms.sym->name : "[unknown]";
+
+		scnprintf(symbuf, sizeof(symbuf), "%s", name);
+	}
+
+	ret += scnprintf(hpp->buf, hpp->size, "%-*.*s", sym_width, sym_width, symbuf);
+	return ret;
+}
+
+/*
+ * cycles_percent_entry - Render cycles percentage column
+ */
+__maybe_unused
+static int
+cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		     struct hist_entry *he)
+{
+	struct c2c_hist_entry *c2c_he;
+	int width = c2c_width(fmt, hpp, he->hists);
+	u64 fn_cycles, total_cycles;
+	const char *prefix;
+	double pct;
+	int ret;
+
+	/* Hide Cycles Percent for child functions and cachelines. */
+	if (he->parent_he)
+		return scnprintf(hpp->buf, hpp->size, "%*s", width, "");
+
+	c2c_he = container_of(he, struct c2c_hist_entry, he);
+	fn_cycles = c2c_hist_entry__cycles(c2c_he);
+	total_cycles = c2c_ext.total_cycles;
+	pct = total_cycles > 0 ? (double)fn_cycles / total_cycles * 100.0 : 0.0;
+
+	/* Add folded sign only for level-1 entries */
+	prefix = he->unfolded ? "- " : "+ ";
+	ret = scnprintf(hpp->buf, hpp->size, "%s", prefix);
+	advance_hpp(hpp, ret);
+
+	ret += scnprintf(hpp->buf, hpp->size, "%*.2f%%", width - ret - 1, pct);
+	return ret;
+}
+
 int perf_c2c__browse_function_view(struct hists *hists __maybe_unused)
 {
 	return 0;
