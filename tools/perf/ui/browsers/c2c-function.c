@@ -50,19 +50,16 @@ struct c2c_function_browser {
 	struct hists		*hists;
 };
 
-__maybe_unused
 static inline u64 c2c_hitm_count(const struct c2c_stats *stats)
 {
 	return stats->rmt_hitm + stats->lcl_hitm;
 }
 
-__maybe_unused
 static inline bool symbol_name_equal(struct symbol *a, struct symbol *b)
 {
 	return a && b && strcmp(a->name, b->name) == 0;
 }
 
-__maybe_unused
 static inline u64 hist_entry__iaddr(struct hist_entry *he)
 {
 	if (he->mem_info)
@@ -133,7 +130,6 @@ static int c2c_header(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 /*
  * Return the total cycles for a c2c_hist_entry (rmt_hitm + lcl_hitm + other loads).
  */
-__maybe_unused
 static u64 c2c_hist_entry__cycles(struct c2c_hist_entry *c2c_he)
 {
 	u64 cycles_rmt, cycles_lcl, cycles_load, other_load, total_hitm;
@@ -148,7 +144,6 @@ static u64 c2c_hist_entry__cycles(struct c2c_hist_entry *c2c_he)
 }
 
 /* Sum c2c_hist_entry__cycles() across all level-1 entries. */
-__maybe_unused
 static u64 c2c_ext__total_cycles(void)
 {
 	struct rb_node *nd;
@@ -165,7 +160,6 @@ static u64 c2c_ext__total_cycles(void)
 }
 
 /* Sum child entries' store counts under a level-1 hist_entry. */
-__maybe_unused
 static u64 hist_entry__child_stores(struct hist_entry *he)
 {
 	struct rb_node *nd;
@@ -546,7 +540,6 @@ out:
 	return ret;
 }
 
-__maybe_unused
 static int
 c2c_function_hists__init(struct c2c_hists *hists,
 			 const char *sort,
@@ -562,7 +555,6 @@ c2c_function_hists__init(struct c2c_hists *hists,
 	return function_hpp_list__parse(&hists->list, /*output=*/NULL, sort, env);
 }
 
-__maybe_unused
 static int
 c2c_function_hists__reinit(struct c2c_hists *c2c_hists,
 			   const char *output,
@@ -600,7 +592,6 @@ static void c2c_stats_merge(struct stats *dest, struct stats *src)
 }
 
 /* Merge compute_stats during function aggregation. */
-__maybe_unused
 static void c2c_add_cstats(struct compute_stats *dest, struct compute_stats *src)
 {
 	c2c_stats_merge(&dest->rmt_hitm, &src->rmt_hitm);
@@ -610,7 +601,6 @@ static void c2c_add_cstats(struct compute_stats *dest, struct compute_stats *src
 	c2c_stats_merge(&dest->load, &src->load);
 }
 
-__maybe_unused
 static bool hist_entry__add_c2c_stats(struct hist_entry *he, struct c2c_stats *stats)
 {
 	u64 nr_events = c2c_hitm_count(stats) + stats->rmt_peer + stats->lcl_peer;
@@ -793,7 +783,6 @@ c2c_child_entry__insert(struct hist_entry *parent_he, struct hist_entry *child_h
 	parent_he->nr_rows++;
 }
 
-__maybe_unused
 static struct hist_entry *
 c2c_function_hists__level1_entry(struct symbol *sym, u64 iaddr,
 				 struct hist_entry *detail_he,
@@ -848,7 +837,6 @@ c2c_function_hists__level1_entry(struct symbol *sym, u64 iaddr,
 	return he;
 }
 
-__maybe_unused
 static struct c2c_hist_entry *
 c2c_function_hists__level2_entry(struct c2c_hist_entry *level1_c2c,
 				 struct symbol *sym, u64 iaddr,
@@ -909,7 +897,6 @@ c2c_function_hists__level2_entry(struct c2c_hist_entry *level1_c2c,
 	return level2_c2c;
 }
 
-__maybe_unused
 static struct c2c_hist_entry *
 c2c_function_hists__level3_entry(struct c2c_hist_entry *level2_c2c, u64 cl_addr,
 				 struct c2c_hist_entry *cacheline_src_he)
@@ -949,6 +936,255 @@ c2c_function_hists__level3_entry(struct c2c_hist_entry *level2_c2c, u64 cl_addr,
 	c2c_child_entry__insert(level2_he, &level3_c2c->he, p, parent, leftmost);
 
 	return level3_c2c;
+}
+
+/*
+ * Re-sort child entries of @parent_he by total store count, descending.
+ */
+static void c2c_he__resort_by_stores(struct hist_entry *parent_he)
+{
+	struct rb_root_cached new_root = RB_ROOT_CACHED;
+	struct rb_node *nd;
+
+	if (!parent_he->has_children)
+		return;
+
+	/* Extract all nodes and re-insert sorted by total_stores */
+	while ((nd = rb_first_cached(&parent_he->hroot_out))) {
+		struct hist_entry *he = rb_entry(nd, struct hist_entry, rb_node);
+		struct c2c_hist_entry *c2c_he = container_of(he, struct c2c_hist_entry, he);
+		struct rb_node **p = &new_root.rb_root.rb_node;
+		struct rb_node *parent = NULL;
+		bool leftmost = true;
+
+		/* Remove from current tree */
+		rb_erase_cached(&he->rb_node, &parent_he->hroot_out);
+
+		/* Insert sorted by store count, descending. */
+		while (*p) {
+			struct hist_entry *iter = rb_entry(*p, struct hist_entry, rb_node);
+			struct c2c_hist_entry *c2c_iter = container_of(iter,
+								       struct c2c_hist_entry,
+								       he);
+
+			parent = *p;
+			if (c2c_he->stats.store > c2c_iter->stats.store) {
+				p = &parent->rb_left;
+			} else {
+				p = &parent->rb_right;
+				leftmost = false;
+			}
+		}
+
+		rb_link_node(&he->rb_node, parent, p);
+		rb_insert_color_cached(&he->rb_node, &new_root, leftmost);
+	}
+
+	parent_he->hroot_out = new_root;
+}
+
+#define MAX_SYMBOLS_PER_CL 64
+
+struct function_seen {
+	struct symbol	*sym;
+	u64		 iaddr;
+};
+
+static bool function_seen__find(const struct function_seen *seen, int nr,
+				struct symbol *sym, u64 iaddr)
+{
+	int i;
+
+	for (i = 0; i < nr; i++) {
+		if (seen[i].sym == sym && seen[i].iaddr == iaddr)
+			return true;
+	}
+	return false;
+}
+
+/* Aggregate stats from the cacheline-side entry @c2c_b into level 2/3 @dst. */
+static bool c2c_he__add_sharing(struct c2c_hist_entry *dst, struct c2c_hist_entry *src)
+{
+	c2c_add_stats(&dst->stats, &src->stats);
+	c2c_add_cstats(&dst->cstats, &src->cstats);
+	return hist_entry__add_c2c_stats(&dst->he, &src->stats);
+}
+
+/*
+ * Process one cacheline and create/update the level-1/2/3 hierarchy entries
+ * for every pair of functions sharing it.
+ */
+static void c2c_function__process_cl(struct c2c_hist_entry *cacheline_he, u64 cl_addr,
+				     struct thread *synthetic_thread)
+{
+	struct rb_node *nd_a, *nd_b;
+	struct function_seen seen[MAX_SYMBOLS_PER_CL];
+	int nr_seen = 0;
+	bool warned = false;
+
+	for (nd_a = rb_first_cached(&cacheline_he->hists->hists.entries); nd_a;
+	     nd_a = rb_next(nd_a)) {
+		struct hist_entry *he_a = rb_entry(nd_a, struct hist_entry, rb_node);
+		struct c2c_hist_entry *c2c_a;
+		struct hist_entry *level1_he;
+		struct c2c_hist_entry *level1_c2c;
+		u64 iaddr_a;
+
+		if (!he_a->ms.sym || he_a->filtered)
+			continue;
+
+		c2c_a = container_of(he_a, struct c2c_hist_entry, he);
+		iaddr_a = hist_entry__iaddr(he_a);
+
+		level1_he = c2c_function_hists__level1_entry(he_a->ms.sym, iaddr_a,
+							     he_a, synthetic_thread);
+		if (!level1_he)
+			continue;
+
+		level1_c2c = container_of(level1_he, struct c2c_hist_entry, he);
+
+		c2c_add_stats(&level1_c2c->stats, &c2c_a->stats);
+		c2c_add_cstats(&level1_c2c->cstats, &c2c_a->cstats);
+		c2c_add_stats(&c2c_ext.function_hists.stats, &c2c_a->stats);
+
+		/* Skip the inner loop when this (symbol, iaddr) is already a parent. */
+		if (function_seen__find(seen, nr_seen, he_a->ms.sym, iaddr_a))
+			continue;
+
+		if (nr_seen < MAX_SYMBOLS_PER_CL) {
+			seen[nr_seen].sym = he_a->ms.sym;
+			seen[nr_seen].iaddr = iaddr_a;
+			nr_seen++;
+		} else if (!warned) {
+			pr_debug("c2c: more than %d symbols on cacheline, some may be duplicated\n",
+				 MAX_SYMBOLS_PER_CL);
+			warned = true;
+		}
+
+		for (nd_b = rb_first_cached(&cacheline_he->hists->hists.entries); nd_b;
+		     nd_b = rb_next(nd_b)) {
+			struct hist_entry *he_b = rb_entry(nd_b, struct hist_entry, rb_node);
+			struct c2c_hist_entry *c2c_b, *level2_c2c, *level3_c2c;
+			u64 iaddr_b;
+
+			if (!he_b->ms.sym || he_b->filtered)
+				continue;
+
+			c2c_b = container_of(he_b, struct c2c_hist_entry, he);
+			iaddr_b = hist_entry__iaddr(he_b);
+
+			/* Skip self. */
+			if (iaddr_a == iaddr_b &&
+			    symbol_name_equal(he_a->ms.sym, he_b->ms.sym))
+				continue;
+
+			level2_c2c = c2c_function_hists__level2_entry(level1_c2c, he_b->ms.sym,
+								      iaddr_b, he_b);
+			if (!level2_c2c || !c2c_he__add_sharing(level2_c2c, c2c_b))
+				continue;
+
+			level3_c2c = c2c_function_hists__level3_entry(level2_c2c, cl_addr,
+								      cacheline_he);
+			if (!level3_c2c)
+				continue;
+
+			c2c_he__add_sharing(level3_c2c, c2c_b);
+		}
+	}
+}
+
+/* Sort level-2/3 children by store count, then compute the global total. */
+static void c2c_function__finalize(void)
+{
+	struct rb_node *nd_l1;
+
+	for (nd_l1 = rb_first_cached(&c2c_ext.function_hists.hists.entries); nd_l1;
+	     nd_l1 = rb_next(nd_l1)) {
+		struct hist_entry *he_l1 = rb_entry(nd_l1, struct hist_entry, rb_node);
+		struct rb_node *nd_l2;
+
+		if (!he_l1->has_children)
+			continue;
+
+		c2c_he__resort_by_stores(he_l1);
+
+		for (nd_l2 = rb_first_cached(&he_l1->hroot_out); nd_l2;
+		     nd_l2 = rb_next(nd_l2)) {
+			struct hist_entry *he_l2 = rb_entry(nd_l2, struct hist_entry, rb_node);
+
+			if (he_l2->has_children)
+				c2c_he__resort_by_stores(he_l2);
+		}
+	}
+
+	c2c_ext.total_cycles = c2c_ext__total_cycles();
+}
+
+/*
+ * Build the three-level function view in a single pass over the cacheline
+ * entries:
+ *   L1: aggregate stats per primary function
+ *   L2: sharing functions referenced from each L1 function
+ *   L3: cachelines that pair L1 with L2
+ */
+__maybe_unused
+static int build_function_view_hierarchy(void)
+{
+	static const char output_fields[] =
+		"cycles_percent,total_stores,iaddr_symbol,symbol_view,cacheline_symbol";
+	struct thread *synthetic_thread;
+	struct rb_node *nd_cl;
+	int ret;
+
+	c2c_ext.total_cycles = 0;
+
+	hists__delete_entries(&c2c_ext.function_hists.hists);
+	if (c2c_ext.function_hists.list.fields.next)
+		perf_hpp__reset_output_field(&c2c_ext.function_hists.list);
+
+	ret = c2c_function_hists__init(&c2c_ext.function_hists,
+				       "iaddr_symbol,symbol_view", 2, NULL);
+	if (ret)
+		return ret;
+
+	nd_cl = rb_first_cached(&c2c.hists.hists.entries);
+	if (!nd_cl)
+		return -EINVAL;
+	synthetic_thread = rb_entry(nd_cl, struct hist_entry, rb_node)->thread;
+	if (!synthetic_thread)
+		return -EINVAL;
+
+	for (; nd_cl; nd_cl = rb_next(nd_cl)) {
+		struct hist_entry *he_cl = rb_entry(nd_cl, struct hist_entry, rb_node);
+		struct c2c_hist_entry *cacheline_he = container_of(he_cl,
+								   struct c2c_hist_entry, he);
+		u64 cl_addr;
+
+		if (c2c_hitm_count(&cacheline_he->stats) == 0 ||
+		    !cacheline_he->hists ||
+		    !cacheline_he->hists->hists.entries.rb_root.rb_node ||
+		    !he_cl->mem_info)
+			continue;
+
+		cl_addr = cl_address(mem_info__daddr(he_cl->mem_info)->addr, chk_double_cl);
+		c2c_function__process_cl(cacheline_he, cl_addr, synthetic_thread);
+	}
+
+	ret = c2c_function_hists__reinit(&c2c_ext.function_hists, output_fields,
+					 "cycles_percent", NULL);
+	if (ret)
+		return ret;
+
+	hists__collapse_resort(&c2c_ext.function_hists.hists, NULL);
+	hists__output_resort(&c2c_ext.function_hists.hists, NULL);
+
+	c2c_function__finalize();
+
+	c2c_ext.function_hists.hists.symbol_filter_str = NULL;
+	c2c_ext.function_hists.hists.socket_filter = -1;
+	c2c_ext.function_hists.hists.nr_hpp_node = 0;
+
+	return 0;
 }
 
 int perf_c2c__browse_function_view(struct hists *hists __maybe_unused)
