@@ -70,7 +70,6 @@ static inline u64 hist_entry__iaddr(struct hist_entry *he)
 	return he->ms.sym ? he->ms.sym->start : 0;
 }
 
-__maybe_unused
 static int symbol_width(struct hists *hists, struct sort_entry *se)
 {
 	int width = hists__col_len(hists, se->se_width_idx);
@@ -86,7 +85,6 @@ static struct c2c_dimension dim_function_view;
 /*
  * c2c_width - Calculate width for a C2C column in function view
  */
-__maybe_unused
 static int c2c_width(struct perf_hpp_fmt *fmt,
 		     struct perf_hpp *hpp __maybe_unused,
 		     struct hists *hists)
@@ -103,7 +101,6 @@ static int c2c_width(struct perf_hpp_fmt *fmt,
 	return dim->width;
 }
 
-__maybe_unused
 static int c2c_header(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		      struct hists *hists, int line, int *span)
 {
@@ -184,7 +181,6 @@ static u64 hist_entry__child_stores(struct hist_entry *he)
 	return sum;
 }
 
-__maybe_unused
 static int
 total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		   struct hist_entry *he)
@@ -202,7 +198,6 @@ total_stores_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 /*
  * cacheline_symbol_entry - Render cacheline address for function view
  */
-__maybe_unused
 static int
 cacheline_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		       struct hist_entry *he)
@@ -222,7 +217,6 @@ cacheline_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 }
 
 /* Render the code (instruction) address for level-1 and level-2 entries. */
-__maybe_unused
 static int
 iaddr_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		   struct hist_entry *he)
@@ -254,7 +248,6 @@ iaddr_symbol_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 /*
  * symbol_view_entry - Render symbol name for function view with expansion indicators
  */
-__maybe_unused
 static int
 symbol_view_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		  struct hist_entry *he)
@@ -294,7 +287,6 @@ symbol_view_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 /*
  * cycles_percent_entry - Render cycles percentage column
  */
-__maybe_unused
 static int
 cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		     struct hist_entry *he)
@@ -327,7 +319,6 @@ cycles_percent_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 /*
  * cycles_percent_cmp - Comparison function for cycles percentage sorting
  */
-__maybe_unused
 static int64_t
 cycles_percent_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 		   struct hist_entry *left, struct hist_entry *right)
@@ -343,7 +334,6 @@ cycles_percent_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 /*
  * iaddr_symbol_cmp - Comparison function for instruction address sorting
  */
-__maybe_unused
 static int64_t
 iaddr_symbol_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 		 struct hist_entry *left, struct hist_entry *right)
@@ -351,7 +341,6 @@ iaddr_symbol_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	return sort__iaddr_cmp(left, right);
 }
 
-__maybe_unused
 static int64_t
 empty_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	  struct hist_entry *left __maybe_unused,
@@ -363,7 +352,6 @@ empty_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 /*
  * total_stores_cmp - Comparison function for total stores sorting
  */
-__maybe_unused
 static int64_t
 total_stores_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 		 struct hist_entry *left, struct hist_entry *right)
@@ -374,6 +362,107 @@ total_stores_cmp(struct perf_hpp_fmt *fmt __maybe_unused,
 	u64 right_store = (u64)c2c_right->stats.store;
 
 	return (left_store > right_store) - (left_store < right_store);
+}
+
+/*
+ * Function view dimensions
+ */
+static struct c2c_dimension dim_cycles_percent = {
+	.header		= HEADER_BOTH("HITM ", "cycles"),
+	.name		= "cycles_percent",
+	.cmp		= cycles_percent_cmp,
+	.entry		= cycles_percent_entry,
+	.width		= 9,
+};
+
+static struct c2c_dimension dim_total_stores = {
+	.header		= HEADER_BOTH("Store", "count"),
+	.name		= "total_stores",
+	.cmp		= total_stores_cmp,
+	.entry		= total_stores_entry,
+	.width		= 7,
+};
+
+static struct c2c_dimension dim_cacheline_symbol = {
+	.header		= HEADER_LOW("Cacheline"),
+	.name		= "cacheline_symbol",
+	.cmp		= empty_cmp,
+	.entry		= cacheline_symbol_entry,
+	.width		= 18,
+};
+
+static struct c2c_dimension dim_iaddr_symbol = {
+	.header		= HEADER_LOW("Code address"),
+	.name		= "iaddr_symbol",
+	.cmp		= iaddr_symbol_cmp,
+	.entry		= iaddr_symbol_entry,
+	.width		= 20,
+};
+
+static struct c2c_dimension dim_function_view = {
+	.header		= HEADER_LOW("Symbol"),
+	.name		= "symbol_view",
+	.se		= &sort_sym,
+	.cmp		= empty_cmp,
+	.entry		= symbol_view_entry,
+	.width		= SYMBOL_WIDTH,
+};
+
+static struct c2c_dimension *function_view_dimensions[] = {
+	&dim_iaddr_symbol,
+	&dim_cycles_percent,
+	&dim_total_stores,
+	&dim_cacheline_symbol,
+	&dim_function_view,
+	NULL,
+};
+
+__maybe_unused
+static struct c2c_dimension *get_function_dimension(const char *name)
+{
+	unsigned int i;
+
+	for (i = 0; function_view_dimensions[i]; i++) {
+		struct c2c_dimension *dim = function_view_dimensions[i];
+
+		if (!strcmp(dim->name, name))
+			return dim;
+	}
+
+	return NULL;
+}
+
+__maybe_unused
+static struct c2c_fmt *get_function_format(const char *name)
+{
+	struct c2c_dimension *dim = get_function_dimension(name);
+	struct c2c_fmt *c2c_fmt;
+	struct perf_hpp_fmt *fmt;
+
+	if (!dim)
+		return NULL;
+
+	c2c_fmt = zalloc(sizeof(*c2c_fmt));
+	if (!c2c_fmt)
+		return NULL;
+
+	fmt = &c2c_fmt->fmt;
+
+	c2c_fmt->dim = dim;
+	INIT_LIST_HEAD(&fmt->list);
+	INIT_LIST_HEAD(&fmt->sort_list);
+
+	fmt->cmp	= dim->cmp;
+	fmt->sort	= dim->cmp;
+	fmt->color	= dim->color;
+	fmt->entry	= dim->entry;
+	fmt->header	= c2c_header;
+	fmt->width	= c2c_width;
+	fmt->collapse	= dim->cmp;
+	fmt->equal	= fmt_equal;
+	fmt->free	= fmt_free;
+
+	return c2c_fmt;
 }
 
 int perf_c2c__browse_function_view(struct hists *hists __maybe_unused)
