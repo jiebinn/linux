@@ -365,6 +365,18 @@ TUI OUTPUT
 The TUI output provides interactive interface to navigate
 through cachelines list and to display offset details.
 
+Pressing the 'TAB' key in the cacheline view switches to the function
+view.  The function view shows a three-level hierarchy of the same data,
+organized around functions rather than cachelines:
+
+  Level 1: primary functions, sorted by HITM cycles
+  Level 2: other functions that share cachelines with the level-1 function
+  Level 3: the specific shared cachelines for each function pair
+
+In the function view the 'd' key opens the detail view of the selected
+cacheline, 'e'/'+' expands or collapses the current entry, and 'TAB',
+'ESC' or 'q' returns to the cacheline view.
+
 For details please refer to the help window by pressing '?' key.
 
 CREDITS
