@@ -2666,6 +2666,7 @@ static int perf_c2c__hists_browse(struct hists *hists)
 	static const char help[] =
 	" d             Display cacheline details \n"
 	" ENTER         Toggle callchains (if present) \n"
+	" TAB           Switch to Function view\n"
 	" q             Quit \n";
 
 	browser = perf_c2c_browser__new(hists);
@@ -2686,6 +2687,9 @@ static int perf_c2c__hists_browse(struct hists *hists)
 			goto out;
 		case 'd':
 			perf_c2c__browse_cacheline(browser->he_selection);
+			break;
+		case '\t':
+			perf_c2c__browse_function_view(hists);
 			break;
 		case '?':
 			ui_browser__help_window(&browser->b, help);
