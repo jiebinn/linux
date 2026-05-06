@@ -131,5 +131,6 @@ void fmt_free(struct perf_hpp_fmt *fmt);
 bool fmt_equal(struct perf_hpp_fmt *a, struct perf_hpp_fmt *b);
 
 int perf_c2c__browse_cacheline(struct hist_entry *he);
+int perf_c2c__browse_function_view(struct hists *hists);
 
 #endif /* _PERF_C2C_H_ */
