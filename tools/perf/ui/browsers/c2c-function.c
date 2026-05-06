@@ -43,7 +43,7 @@ struct perf_c2c_ext {
 	u64			total_cycles;
 };
 
-static struct perf_c2c_ext c2c_ext __maybe_unused;
+static struct perf_c2c_ext c2c_ext;
 
 struct c2c_function_browser {
 	struct hist_browser	hb;
@@ -1127,7 +1127,6 @@ static void c2c_function__finalize(void)
  *   L2: sharing functions referenced from each L1 function
  *   L3: cachelines that pair L1 with L2
  */
-__maybe_unused
 static int build_function_view_hierarchy(void)
 {
 	static const char output_fields[] =
@@ -1187,7 +1186,156 @@ static int build_function_view_hierarchy(void)
 	return 0;
 }
 
-int perf_c2c__browse_function_view(struct hists *hists __maybe_unused)
+static int c2c_function_browser__title(struct hist_browser *browser,
+				       char *bf, size_t size)
 {
+	scnprintf(bf, size,
+		  "Shared Data Functions Table     (%lu entries, sorted on HITM cycles)",
+		  browser->nr_non_filtered_entries);
 	return 0;
+}
+
+static struct c2c_function_browser *c2c_function_browser__new(struct hists *hists)
+{
+	struct c2c_function_browser *browser;
+
+	if (!hists)
+		return NULL;
+
+	browser = zalloc(sizeof(*browser));
+	if (!browser)
+		return NULL;
+
+	browser->hists = hists;
+	hist_browser__init(&browser->hb, hists);
+
+	browser->hb.title = c2c_function_browser__title;
+	browser->hb.c2c_filter = true;
+	browser->hb.show_headers = true;
+	browser->hb.min_pcnt = 0.0;
+
+	return browser;
+}
+
+/*
+ * c2c_function_browser__delete - Free function browser
+ */
+static void c2c_function_browser__delete(struct c2c_function_browser *browser)
+{
+	free(browser);
+}
+
+/*
+ * c2c_function_browser__handle_expand - Handle expand/collapse operation
+ */
+static int c2c_function_browser__handle_expand(struct c2c_function_browser *browser)
+{
+	struct hist_entry *he = browser->hb.he_selection;
+
+	if (!he || !he->has_children)
+		return 0;
+
+	he->unfolded = !he->unfolded;
+
+	/* Refresh browser entry count */
+	browser->hb.b.nr_entries = browser->hb.b.refresh(&browser->hb.b);
+	ui_browser__update_nr_entries(&browser->hb.b, browser->hb.b.nr_entries);
+
+	return 0;
+}
+
+static int c2c_function_browser__browse_cacheline_detail(struct hist_entry *he_selection,
+							 struct hists *hists)
+{
+	struct rb_node *nd;
+	u64 cl_addr;
+
+	if (!he_selection || !he_selection->parent_he ||
+	    !he_selection->parent_he->parent_he || !he_selection->mem_info)
+		return -1;
+
+	cl_addr = cl_address(mem_info__daddr(he_selection->mem_info)->addr, chk_double_cl);
+
+	for (nd = rb_first_cached(&hists->entries); nd; nd = rb_next(nd)) {
+		struct hist_entry *he_cl = rb_entry(nd, struct hist_entry, rb_node);
+		u64 this_cl;
+
+		if (!he_cl->mem_info)
+			continue;
+
+		this_cl = cl_address(mem_info__daddr(he_cl->mem_info)->addr, chk_double_cl);
+		if (this_cl == cl_addr)
+			return perf_c2c__browse_cacheline(he_cl);
+	}
+
+	return -1;
+}
+
+/*
+ * perf_c2c__browse_function_view - Browse function view with TAB key support
+ * @hists: Main cacheline histograms
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+int perf_c2c__browse_function_view(struct hists *hists)
+{
+	struct c2c_function_browser *sym_browser;
+	bool saved_use_callchain = symbol_conf.use_callchain;
+	int key, ret;
+	static const char help[] =
+	" d             Display cacheline details for the selected entry\n"
+	" e/+           Expand/collapse the selected entry\n"
+	" TAB/ESC/q     Return to the cacheline view\n";
+
+	ret = build_function_view_hierarchy();
+	if (ret) {
+		ui__error("Failed to build function view hierarchy (ret=%d)\n", ret);
+		goto out;
+	}
+
+	sym_browser = c2c_function_browser__new(&c2c_ext.function_hists.hists);
+	if (!sym_browser) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	/* Disable callchain while the function view is active. */
+	symbol_conf.use_callchain = false;
+
+	/* Reset abort key so we can receive Ctrl-C as a key. */
+	SLang_reset_tty();
+	SLang_init_tty(0, 0, 0);
+
+	sym_browser->hb.nr_non_filtered_entries =
+		c2c_ext.function_hists.hists.nr_non_filtered_entries;
+
+	while (1) {
+		key = hist_browser__run(&sym_browser->hb, "? - help", true, 0);
+
+		switch (key) {
+		case 'q':
+		case K_TAB:
+		case K_ESC:
+			goto browser_done;
+		case 'd':
+			c2c_function_browser__browse_cacheline_detail(sym_browser->hb.he_selection,
+								      hists);
+			break;
+		case 'e':
+		case '+':
+			c2c_function_browser__handle_expand(sym_browser);
+			break;
+		case '?':
+			ui_browser__help_window(&sym_browser->hb.b, help);
+			break;
+		default:
+			break;
+		}
+	}
+
+browser_done:
+	c2c_function_browser__delete(sym_browser);
+out:
+	symbol_conf.use_callchain = saved_use_callchain;
+	return ret;
 }
