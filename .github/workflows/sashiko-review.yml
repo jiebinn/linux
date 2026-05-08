@@ -16,7 +16,7 @@ permissions:
 env:
   SASHIKO_REPO: rgushchin/sashiko
   SASHIKO_REF: main
-  MODEL: us.anthropic.claude-sonnet-4-6
+  MODEL: us.anthropic.claude-opus-4-7
   MAX_PATCHES: ${{ github.event.inputs.max_patches || '50' }}
   AWS_REGION: us-east-2
 
