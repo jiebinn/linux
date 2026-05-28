@@ -7,7 +7,7 @@ on:
       max_patches:
         description: "Max patches to review before aborting"
         required: false
-        default: "50"
+        default: "35"
 
 permissions:
   contents: read
@@ -17,7 +17,7 @@ env:
   SASHIKO_REPO: rgushchin/sashiko
   SASHIKO_REF: main
   MODEL: us.anthropic.claude-opus-4-7
-  MAX_PATCHES: ${{ github.event.inputs.max_patches || '100' }}
+  MAX_PATCHES: ${{ github.event.inputs.max_patches || '35' }}
   AWS_REGION: us-east-2
 
 jobs:

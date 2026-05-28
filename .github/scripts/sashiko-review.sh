@@ -26,7 +26,12 @@ if (( N == 0 )); then
 fi
 
 if (( N > MAX_PATCHES )); then
-    printf 'PR has %d commits; MAX_PATCHES=%d. Refusing to review.\n' "$N" "$MAX_PATCHES" > "$OUTPUT_DIR/comment.md"
+    {
+        printf '**Sashiko review skipped:** this PR has %d commits, exceeding the limit of %d.\n\n' "$N" "$MAX_PATCHES"
+        printf 'Large series take a long time and consume significant model budget. Options:\n'
+        printf '- **Check that your PR base branch is correct.** A common cause of an inflated commit count is branching from the wrong base, which pulls in unrelated upstream commits.\n'
+        printf '- Split the series into smaller PRs and resubmit.\n'
+    } > "$OUTPUT_DIR/comment.md"
     echo "SASHIKO_TOO_MANY=1" >> "${GITHUB_ENV:-/dev/null}"
     exit 0
 fi
