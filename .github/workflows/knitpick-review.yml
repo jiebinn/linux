@@ -1,0 +1,102 @@
+name: Knitpick Review
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      max_patches:
+        description: "Max patches to review before aborting"
+        required: false
+        default: "35"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  PROMPTS_REPO: intel-sandbox/review-prompts-sohil
+  PROMPTS_REF: x86-prompts
+  MODEL: us.anthropic.claude-opus-4-7
+  MAX_PATCHES: ${{ github.event.inputs.max_patches || '35' }}
+  AWS_REGION: us-east-2
+
+jobs:
+  knitpick:
+    runs-on:
+      group: arc-prod-blue
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout kernel (PR head)
+        uses: actions/checkout@v6
+        with:
+          # Full clone: fetch-depth: 0 gives the complete commit graph and
+          # blobs locally, so `git log base..head` and `git format-patch`
+          # resolve without any on-demand network fetches.
+          fetch-depth: 0
+          path: kernel
+
+      - name: Checkout review prompts
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.PROMPTS_REPO }}
+          ref: ${{ env.PROMPTS_REF }}
+          path: review-prompts
+          # The prompts repo is internal; the default GITHUB_TOKEN can't read
+          # another repo. Provide a PAT/token secret with read access to it.
+          token: ${{ secrets.PROMPTS_REPO_TOKEN }}
+
+      - name: Install Claude CLI
+        run: |
+          if ! command -v node >/dev/null; then
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+            sudo apt-get install -y nodejs
+          fi
+          # Use a user-writable npm prefix so the global install doesn't need
+          # root (the default prefix /usr/lib/node_modules is root-owned).
+          npm config set prefix "$HOME/.npm-global"
+          echo "$HOME/.npm-global/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.npm-global/bin:$PATH"
+          if ! command -v claude >/dev/null; then
+            npm install -g @anthropic-ai/claude-code
+          fi
+          claude --version
+
+      - name: Run knitpick review
+        id: review
+        env:
+          CLAUDE_CODE_USE_BEDROCK: "1"
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          MODEL: ${{ env.MODEL }}
+          ANTHROPIC_MODEL: ${{ env.MODEL }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+          REPO_PATH: ${{ github.workspace }}/kernel
+          PROMPTS_DIR: ${{ github.workspace }}/review-prompts/kernel
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OUTPUT_DIR: ${{ github.workspace }}/knitpick-out
+        run: |
+          .github/scripts/knitpick-review.sh
+        working-directory: kernel
+
+      - name: Upload review artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: knitpick-review
+          path: knitpick-out/
+          if-no-files-found: ignore
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request' && hashFiles('knitpick-out/comment.md') != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('knitpick-out/comment.md', 'utf8');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body,
+            });
