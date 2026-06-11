@@ -26,6 +26,20 @@ jobs:
     timeout-minutes: 600
 
     steps:
+      # Restore the kernel .git warmed by warm-kernel-cache.yml so the checkout
+      # below only fetches the PR delta instead of re-cloning the whole tree.
+      # restore-only (never save): PR runs must not upload a multi-GB cache.
+      # The kernel-git- prefix grabs the most recent warmed entry without
+      # needing to know the current default-branch SHA. Purely an accelerator;
+      # on a miss the checkout just fetches more.
+      - name: Restore kernel .git cache
+        uses: actions/cache/restore@v4
+        with:
+          path: kernel/.git
+          key: kernel-git-${{ github.event.pull_request.base.sha }}
+          restore-keys: |
+            kernel-git-
+
       - name: Checkout kernel (PR head)
         uses: actions/checkout@v6
         with:
