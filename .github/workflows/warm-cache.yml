@@ -1,0 +1,178 @@
+name: Warm Review Caches
+
+# Producer for the caches consumed by the PR review workflows
+# (knitpick-review.yml, sashiko-review.yml):
+#   - kernel .git     (avoids re-cloning the multi-GB kernel tree per PR)
+#   - sashiko target/ (avoids rebuilding the sashiko review binary per PR)
+#
+# Runs on the default branch so the caches it writes are visible to all PR
+# runs. This is the crux: GitHub only lets a PR restore caches created on its
+# own ref, its base, or the default branch — so a cache saved by one PR run is
+# invisible to other PRs. Producing here on main makes the caches shared.
+#
+# Purely a performance accelerator: if a cache is missing or stale, the review
+# workflows fall back to fetching/building themselves. Never authoritative, so
+# a failed warm run cannot break reviews — only slow them.
+#
+# Deliberately decoupled from sync.yml: this clones independently and never
+# writes to the repo, so the critical upstream-sync/force-push path stays
+# isolated from this optimization.
+
+on:
+  schedule:
+    # 30 min after sync.yml's 6h cron, so we warm shortly after main may rebase.
+    - cron: '30 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: warm-cache
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write # required to delete old caches via the REST API
+
+env:
+  SASHIKO_REPO: rgushchin/sashiko
+
+jobs:
+  warm:
+    runs-on:
+      group: arc-prod-blue
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout kernel (default branch)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          path: kernel
+
+      # Evict every existing kernel-git-* cache before uploading the new one.
+      # Each entry is ~5 GB; keeping more than one would blow the 10 GB repo
+      # cache budget and LRU-evict other caches. The new key
+      # (kernel-git-<current-sha>) does not exist yet, so this never deletes the
+      # entry we are about to save. Best-effort: a failure here must not block
+      # the save, so it never fails the step.
+      #
+      # Uses github-script (not the gh CLI): every other workflow here uses it,
+      # it needs no external binary on the runner, and it hits the same cache
+      # REST API the gh cache commands wrap.
+      - name: Evict old kernel .git caches
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prefix = 'kernel-git-';
+            const res = await github.rest.actions.getActionsCacheList({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              key: prefix,
+              per_page: 100,
+            });
+            for (const cache of res.data.actions_caches) {
+              console.log(`Deleting cache ${cache.id} (${cache.key})`);
+              await github.rest.actions.deleteActionsCacheById({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                cache_id: cache.id,
+              });
+            }
+
+      - name: Save kernel .git to cache
+        uses: actions/cache/save@v4
+        with:
+          # Cache only .git; the review checkouts reuse it and materialize the
+          # working tree themselves. Keyed on the default-branch HEAD, so a new
+          # entry is written only when main moves (e.g. after an upstream sync).
+          # cache/save is idempotent: if the key already exists, the upload is
+          # skipped.
+          path: kernel/.git
+          key: kernel-git-${{ github.sha }}
+
+      # --- sashiko review binary ---------------------------------------------
+      # Build sashiko on main and cache the whole target/ tree so PR runs
+      # restore it instead of rebuilding. Keyed on the resolved tag, so a
+      # rebuild happens only when sashiko publishes a new version.
+      - name: Resolve latest sashiko tag
+        id: sashiko-tag
+        run: |
+          # Track the highest version tag. sashiko publishes no GitHub
+          # Releases, only tags like v.0.2.1; --refs drops the ^{} deref
+          # entries and sort -V handles version ordering (e.g. .8 < .10).
+          TAG=$(git ls-remote --tags --refs "https://github.com/${SASHIKO_REPO}" \
+                  | awk -F/ '{print $NF}' | sort -V | tail -1)
+          if [ -z "$TAG" ]; then
+            echo "::error::Could not resolve a sashiko tag from ${SASHIKO_REPO}"
+            exit 1
+          fi
+          echo "Latest sashiko tag: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout sashiko
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.SASHIKO_REPO }}
+          ref: ${{ steps.sashiko-tag.outputs.tag }}
+          path: sashiko
+
+      # Restore AFTER checkout: checkout runs `git clean -ffdx`, which would
+      # otherwise delete the restored (gitignored) target/release tree. On a hit
+      # this tag is already built and we skip the build steps below.
+      - name: Restore sashiko target cache
+        id: sashiko-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: sashiko/target/release
+          key: sashiko-target-${{ runner.os }}-${{ steps.sashiko-tag.outputs.tag }}
+
+      - name: Install build dependencies
+        if: steps.sashiko-cache.outputs.cache-hit != 'true'
+        run: |
+          if command -v apt-get >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+              build-essential pkg-config libssl-dev ca-certificates curl
+          elif command -v dnf >/dev/null; then
+            sudo dnf install -y gcc gcc-c++ make pkgconfig openssl-devel ca-certificates curl
+          else
+            echo "::error::No supported package manager (apt-get / dnf) found on this runner"
+            exit 1
+          fi
+
+      - name: Install Rust toolchain
+        if: steps.sashiko-cache.outputs.cache-hit != 'true'
+        run: |
+          if ! command -v cargo >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --default-toolchain stable --profile minimal
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      # Build every binary and example so any of them (review, sashiko,
+      # benchmark, ...) can be run from the restored cache later.
+      - name: Build sashiko binaries
+        if: steps.sashiko-cache.outputs.cache-hit != 'true'
+        working-directory: sashiko
+        run: cargo build --release --bins --examples
+
+      # Keep only what can be executed (the linked binaries under release/ and
+      # release/examples/) and drop the build-only scaffolding. Rust binaries
+      # are statically linked, so deps/, build/, .fingerprint/, and the
+      # incremental rebuild cache are never needed at runtime — dropping them
+      # keeps the cache small against the 10 GB repo budget.
+      - name: Prune build scaffolding
+        if: steps.sashiko-cache.outputs.cache-hit != 'true'
+        working-directory: sashiko/target/release
+        run: |
+          rm -rf deps build .fingerprint incremental
+          rm -f ./*.d
+          echo "Cached release tree:"
+          du -sh . || true
+
+      - name: Save sashiko target cache
+        if: steps.sashiko-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: sashiko/target/release
+          key: sashiko-target-${{ runner.os }}-${{ steps.sashiko-tag.outputs.tag }}

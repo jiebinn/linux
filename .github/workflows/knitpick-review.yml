@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      # Restore the kernel .git warmed by warm-kernel-cache.yml so the checkout
+      # Restore the kernel .git warmed by warm-cache.yml so the checkout
       # below only fetches the PR delta instead of re-cloning the whole tree.
       # restore-only (never save): PR runs must not upload a multi-GB cache.
       # The kernel-git- prefix grabs the most recent warmed entry without

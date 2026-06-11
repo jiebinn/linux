@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 600
 
     steps:
-      # Restore the kernel .git warmed by warm-kernel-cache.yml so the checkout
+      # Restore the kernel .git warmed by warm-cache.yml so the checkout
       # below only fetches the PR delta instead of re-cloning the whole tree.
       # restore-only (never save): PR runs must not upload a multi-GB cache.
       # The kernel-git- prefix grabs the most recent warmed entry without
@@ -68,15 +68,21 @@ jobs:
           ref: ${{ steps.sashiko-tag.outputs.tag }}
           path: sashiko
 
-      # Restore AFTER checkout: checkout runs `git clean -ffdx`, which would
-      # otherwise delete the restored (gitignored) target/ binary. Key on the
-      # resolved tag so we rebuild only when a new sashiko tag is published.
-      - name: Cache sashiko binary
+      # Restore the sashiko target/release tree built on main by warm-cache.yml.
+      # It contains only the executables (no deps/, .fingerprint/, etc.); the
+      # review step runs ./target/release/review directly, so the binary alone
+      # is enough on a hit. restore-only (never save): only the main-branch
+      # warmer produces this cache, so it is shared across all PRs (a PR-saved
+      # cache would be visible only to that PR). Restore AFTER checkout, which
+      # runs `git clean -ffdx` and would otherwise delete the restored
+      # (gitignored) tree. On a miss (e.g. a new tag not yet warmed) the build
+      # steps below run as a fallback so the review still works.
+      - name: Restore sashiko target cache
         id: bincache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
-          path: sashiko/target/release/review
-          key: sashiko-bin-${{ runner.os }}-${{ steps.sashiko-tag.outputs.tag }}
+          path: sashiko/target/release
+          key: sashiko-target-${{ runner.os }}-${{ steps.sashiko-tag.outputs.tag }}
 
       - name: Install build dependencies
         if: steps.bincache.outputs.cache-hit != 'true'
