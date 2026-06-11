@@ -15,7 +15,6 @@ permissions:
 
 env:
   SASHIKO_REPO: rgushchin/sashiko
-  SASHIKO_REF: main
   MODEL: us.anthropic.claude-opus-4-7
   MAX_PATCHES: ${{ github.event.inputs.max_patches || '35' }}
   AWS_REGION: us-east-2
@@ -33,14 +32,40 @@ jobs:
           fetch-depth: 0
           path: kernel
 
+      - name: Resolve latest sashiko tag
+        id: sashiko-tag
+        run: |
+          # Track the highest version tag. sashiko publishes no GitHub
+          # Releases, only tags like v.0.2.1; --refs drops the ^{} deref
+          # entries and sort -V handles version ordering (e.g. .8 < .10).
+          TAG=$(git ls-remote --tags --refs "https://github.com/${SASHIKO_REPO}" \
+                  | awk -F/ '{print $NF}' | sort -V | tail -1)
+          if [ -z "$TAG" ]; then
+            echo "::error::Could not resolve a sashiko tag from ${SASHIKO_REPO}"
+            exit 1
+          fi
+          echo "Latest sashiko tag: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
       - name: Checkout sashiko
         uses: actions/checkout@v6
         with:
           repository: ${{ env.SASHIKO_REPO }}
-          ref: ${{ env.SASHIKO_REF }}
+          ref: ${{ steps.sashiko-tag.outputs.tag }}
           path: sashiko
 
+      # Restore AFTER checkout: checkout runs `git clean -ffdx`, which would
+      # otherwise delete the restored (gitignored) target/ binary. Key on the
+      # resolved tag so we rebuild only when a new sashiko tag is published.
+      - name: Cache sashiko binary
+        id: bincache
+        uses: actions/cache@v4
+        with:
+          path: sashiko/target/release/review
+          key: sashiko-bin-${{ runner.os }}-${{ steps.sashiko-tag.outputs.tag }}
+
       - name: Install build dependencies
+        if: steps.bincache.outputs.cache-hit != 'true'
         run: |
           if command -v apt-get >/dev/null; then
             sudo apt-get update
@@ -54,6 +79,7 @@ jobs:
           fi
 
       - name: Install Rust toolchain
+        if: steps.bincache.outputs.cache-hit != 'true'
         run: |
           if ! command -v cargo >/dev/null; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
@@ -61,18 +87,8 @@ jobs:
           fi
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Cache sashiko build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            sashiko/target
-          key: sashiko-cargo-${{ runner.os }}-${{ hashFiles('sashiko/Cargo.lock') }}
-          restore-keys: |
-            sashiko-cargo-${{ runner.os }}-
-
       - name: Build sashiko review binary
+        if: steps.bincache.outputs.cache-hit != 'true'
         working-directory: sashiko
         run: cargo build --release --bin review
 
