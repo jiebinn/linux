@@ -31,8 +31,8 @@ if (( N > MAX_PATCHES )); then
     {
         printf '**Knitpick review skipped:** this PR has %d commits, exceeding the limit of %d.\n\n' "$N" "$MAX_PATCHES"
         printf 'Large series take a long time and consume significant model budget. Options:\n'
-        printf '%s\n' '- **Check that your PR base branch is correct.** A common cause of an inflated commit count is branching from the wrong base, which pulls in unrelated upstream commits.'
-        printf '%s\n' '- Split the series into smaller PRs and resubmit.'
+        printf '1. **Check that your PR base branch is correct.** A common cause of an inflated commit count is branching from the wrong base, which pulls in unrelated upstream commits.\n'
+        printf '2. **Split the series into smaller PRs and resubmit.**\n'
     } > "$OUTPUT_DIR/comment.md"
     exit 0
 fi
@@ -83,7 +83,9 @@ fi
 # Assemble the PR comment. Always produce comment.md so the post step fires.
 {
     printf '# Knitpick review\n\n'
-    printf 'Style, readability, and maintainability nits only — not a correctness review.\n\n'
+    printf 'Style, readability, and maintainability nits only — not a correctness review.\n'
+    printf 'The AI nitpicker is highly committed to its job and never stops nitpicking. \n'
+    printf 'Please use your discretion to stop iterating on reported issues.\n\n'
     printf 'Model: `%s`  \n' "$MODEL"
     printf 'Base: `%s`  \n' "$BASE_SHA"
     printf 'Head: `%s`  \n\n' "$HEAD_SHA"
