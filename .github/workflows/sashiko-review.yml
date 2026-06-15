@@ -8,13 +8,20 @@ on:
         description: "Max patches to review before aborting"
         required: false
         default: "35"
+      sashiko_tag:
+        description: "Sashiko tag to pin (e.g. v.0.2.1) — overrides the repo variable for this run; blank uses the latest tag"
+        required: false
 
 permissions:
   contents: read
   pull-requests: write
 
 env:
-  SASHIKO_REPO: rgushchin/sashiko
+  SASHIKO_REPO: ${{ vars.SASHIKO_REPO || 'rgushchin/sashiko' }}
+  # Pin an older release here (input wins, then the SASHIKO_TAG repo variable);
+  # blank means "resolve the latest tag". PR runs can't take inputs, so set the
+  # SASHIKO_TAG variable to revert reviews across all PRs.
+  SASHIKO_TAG: ${{ github.event.inputs.sashiko_tag || vars.SASHIKO_TAG || '' }}
   MODEL: us.anthropic.claude-opus-4-7
   MAX_PATCHES: ${{ github.event.inputs.max_patches || '35' }}
   AWS_REGION: us-east-2
@@ -46,19 +53,26 @@ jobs:
           fetch-depth: 0
           path: kernel
 
-      - name: Resolve latest sashiko tag
+      - name: Resolve sashiko tag
         id: sashiko-tag
         run: |
-          # Track the highest version tag. sashiko publishes no GitHub
-          # Releases, only tags like v.0.2.1; --refs drops the ^{} deref
-          # entries and sort -V handles version ordering (e.g. .8 < .10).
-          TAG=$(git ls-remote --tags --refs "https://github.com/${SASHIKO_REPO}" \
-                  | awk -F/ '{print $NF}' | sort -V | tail -1)
+          # Honor a pinned tag (SASHIKO_TAG input/variable) so reviews can be
+          # reverted to an older release; otherwise track the highest version
+          # tag. sashiko publishes no GitHub Releases, only tags like v.0.2.1;
+          # --refs drops the ^{} deref entries and sort -V handles version
+          # ordering (e.g. .8 < .10).
+          if [ -n "$SASHIKO_TAG" ]; then
+            TAG="$SASHIKO_TAG"
+            echo "Pinned sashiko tag: $TAG"
+          else
+            TAG=$(git ls-remote --tags --refs "https://github.com/${SASHIKO_REPO}" \
+                    | awk -F/ '{print $NF}' | sort -V | tail -1)
+            echo "Latest sashiko tag: $TAG"
+          fi
           if [ -z "$TAG" ]; then
             echo "::error::Could not resolve a sashiko tag from ${SASHIKO_REPO}"
             exit 1
           fi
-          echo "Latest sashiko tag: $TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Checkout sashiko

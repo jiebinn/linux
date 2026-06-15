@@ -23,6 +23,13 @@ on:
     # 30 min after sync.yml's 6h cron, so we warm shortly after main may rebase.
     - cron: '30 */6 * * *'
   workflow_dispatch:
+    inputs:
+      sashiko_repo:
+        description: 'Sashiko repository (owner/repo) — overrides the repo variable for this run'
+        required: false
+      sashiko_tag:
+        description: 'Sashiko tag to build and cache (e.g. v.0.2.1) — blank uses the latest tag'
+        required: false
 
 concurrency:
   group: warm-cache
@@ -33,7 +40,11 @@ permissions:
   actions: write # required to delete old caches via the REST API
 
 env:
-  SASHIKO_REPO: rgushchin/sashiko
+  SASHIKO_REPO: ${{ inputs.sashiko_repo || vars.SASHIKO_REPO || 'rgushchin/sashiko' }}
+  # Build and cache this specific tag so a pinned PR review (SASHIKO_TAG in
+  # sashiko-review.yml) finds a warmed binary instead of building from source.
+  # Blank resolves the latest tag.
+  SASHIKO_TAG: ${{ inputs.sashiko_tag || '' }}
 
 jobs:
   warm:
@@ -94,19 +105,26 @@ jobs:
       # Build sashiko on main and cache the whole target/ tree so PR runs
       # restore it instead of rebuilding. Keyed on the resolved tag, so a
       # rebuild happens only when sashiko publishes a new version.
-      - name: Resolve latest sashiko tag
+      - name: Resolve sashiko tag
         id: sashiko-tag
         run: |
-          # Track the highest version tag. sashiko publishes no GitHub
-          # Releases, only tags like v.0.2.1; --refs drops the ^{} deref
-          # entries and sort -V handles version ordering (e.g. .8 < .10).
-          TAG=$(git ls-remote --tags --refs "https://github.com/${SASHIKO_REPO}" \
-                  | awk -F/ '{print $NF}' | sort -V | tail -1)
+          # Honor a pinned tag (sashiko_tag input) so an older release can be
+          # warmed on demand; otherwise track the highest version tag. sashiko
+          # publishes no GitHub Releases, only tags like v.0.2.1; --refs drops
+          # the ^{} deref entries and sort -V handles version ordering
+          # (e.g. .8 < .10).
+          if [ -n "$SASHIKO_TAG" ]; then
+            TAG="$SASHIKO_TAG"
+            echo "Pinned sashiko tag: $TAG"
+          else
+            TAG=$(git ls-remote --tags --refs "https://github.com/${SASHIKO_REPO}" \
+                    | awk -F/ '{print $NF}' | sort -V | tail -1)
+            echo "Latest sashiko tag: $TAG"
+          fi
           if [ -z "$TAG" ]; then
             echo "::error::Could not resolve a sashiko tag from ${SASHIKO_REPO}"
             exit 1
           fi
-          echo "Latest sashiko tag: $TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Checkout sashiko
