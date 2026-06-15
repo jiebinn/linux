@@ -147,6 +147,7 @@ jobs:
           provider = "bedrock"
           model = "${MODEL}"
           max_input_tokens = 950000
+          max_interactions = 200
 
           [ai.bedrock]
           region = "${AWS_REGION}"
