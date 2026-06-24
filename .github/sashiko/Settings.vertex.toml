@@ -1,0 +1,38 @@
+log_level = "info"
+
+[database]
+url = "sashiko.db"
+token = ""
+
+[mailing_lists]
+track = []
+
+[nntp]
+server = "nntp.lore.kernel.org"
+port = 119
+
+[ai]
+provider = "vertex"
+model = "gemini-3.1-pro-preview"
+max_input_tokens = 950000
+max_interactions = 200
+
+[ai.vertex]
+prompt_caching = false   # Claude-only; ignored for Gemini
+
+[ai.claude]
+prompt_caching = true
+
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[git]
+repository_path = "__REPO_PATH__"
+
+[review]
+concurrency = 1
+worktree_dir = "__WORKTREE_DIR__"
+timeout_seconds = 7200
+max_retries = 3
+ignore_files = ["MAINTAINERS", ".mailmap", ".gitignore", "LICENSES/"]
