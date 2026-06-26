@@ -39,6 +39,29 @@ fi
 REVIEW_BIN="$SASHIKO_PATH/target/release/review"
 PROMPTS_DIR="$SASHIKO_PATH/third_party/prompts/kernel"
 
+# Disable background gc/maintenance on the shared (cached) repo. Auto-gc can
+# fire mid-run and hold the repo lock, which has wedged `git worktree add` /
+# `git reset --hard` for hours on the kernel-sized repo.
+git -C "$REPO_PATH" config gc.auto 0 || true
+git -C "$REPO_PATH" config maintenance.auto false || true
+git -C "$REPO_PATH" worktree prune 2>/dev/null || true
+
+# Create a single shared worktree reused across all commits instead of letting
+# the review binary create a fresh worktree per commit. This collapses N
+# (git worktree add + git reset --hard) cycles into one add plus cheap
+# incremental resets between consecutive commits in the series, reducing both
+# runtime and exposure to git worktree-creation hangs on the shared repo.
+WT_PARENT="$(mktemp -d)"
+WT="$WT_PARENT/wt"
+cleanup_wt() {
+    git -C "$REPO_PATH" worktree remove -f "$WT" 2>/dev/null || true
+    git -C "$REPO_PATH" worktree prune 2>/dev/null || true
+    rm -rf "$WT_PARENT"
+}
+trap cleanup_wt EXIT
+git -C "$REPO_PATH" -c safe.bareRepository=all \
+    worktree add --no-checkout --detach "$WT" "$BASE_SHA"
+
 echo "Reviewing $N commit(s) with $MODEL..."
 
 {
@@ -74,6 +97,7 @@ for i in "${!COMMITS[@]}"; do
     if ( cd "$SASHIKO_PATH" && ./target/release/review \
             --baseline "${SHA}^" \
             --review-patch-index 1 \
+            --reuse-worktree "$WT" \
             --prompts "$PROMPTS_DIR" \
             < "$INPUT" > "$OUTPUT" ); then
         INLINE=$(jq -r '.inline_review // ""' "$OUTPUT")
