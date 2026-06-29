@@ -40,7 +40,7 @@ permissions:
   actions: write # required to delete old caches via the REST API
 
 env:
-  SASHIKO_REPO: ${{ inputs.sashiko_repo || vars.SASHIKO_REPO || 'rgushchin/sashiko' }}
+  SASHIKO_REPO: ${{ inputs.sashiko_repo || vars.SASHIKO_REPO || 'intel-sandbox/sashiko' }}
   # Build and cache this specific tag so a pinned PR review (SASHIKO_TAG in
   # sashiko-review.yml) finds a warmed binary instead of building from source.
   # Blank resolves the latest tag.
