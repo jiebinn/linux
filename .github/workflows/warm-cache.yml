@@ -132,6 +132,9 @@ jobs:
         with:
           repository: ${{ env.SASHIKO_REPO }}
           ref: ${{ steps.sashiko-tag.outputs.tag }}
+          # The fork is private; this PAT/App secret grants read access. Falls
+          # back to the default token for a public upstream checkout.
+          token: ${{ secrets.SASHIKO_REPO_TOKEN || github.token }}
           path: sashiko
 
       # Restore AFTER checkout: checkout runs `git clean -ffdx`, which would
