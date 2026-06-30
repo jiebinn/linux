@@ -41,7 +41,7 @@ jobs:
   review:
     runs-on:
       group: arc-prod-blue
-    timeout-minutes: 600
+    timeout-minutes: 1200
 
     steps:
       # Restore the kernel .git warmed by warm-cache.yml so the checkout
