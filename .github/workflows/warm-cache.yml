@@ -110,6 +110,10 @@ jobs:
       # rebuild happens only when sashiko publishes a new version.
       - name: Resolve sashiko tag
         id: sashiko-tag
+        env:
+          # The fork is private; authenticate ls-remote with the same token the
+          # checkout uses. Kept out of the script body so it never hits the log.
+          SASHIKO_REPO_TOKEN: ${{ secrets.SASHIKO_REPO_TOKEN || github.token }}
         run: |
           # Honor a pinned tag (sashiko_tag input) so an older release can be
           # warmed on demand; otherwise track the highest version tag. sashiko
@@ -120,7 +124,8 @@ jobs:
             TAG="$SASHIKO_TAG"
             echo "Pinned sashiko tag: $TAG"
           else
-            TAG=$(git ls-remote --tags --refs "https://github.com/${SASHIKO_REPO}" \
+            TAG=$(git ls-remote --tags --refs \
+                    "https://x-access-token:${SASHIKO_REPO_TOKEN}@github.com/${SASHIKO_REPO}" \
                     | awk -F/ '{print $NF}' | sort -V | tail -1)
             echo "Latest sashiko tag: $TAG"
           fi
