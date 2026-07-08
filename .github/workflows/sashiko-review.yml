@@ -205,8 +205,23 @@ jobs:
           path: sashiko-out/
           if-no-files-found: ignore
 
+      # If the review step was cut short (timeout/cancellation) before all
+      # patches were reviewed, annotate the partial comment so the posted result
+      # is clearly incomplete. Runs on always() so it fires even after a timeout.
+      - name: Annotate incomplete review
+        if: always() && hashFiles('sashiko-out/comment.md') != ''
+        run: |
+          COMMENT="sashiko-out/comment.md"
+          TOTAL=$(cat sashiko-out/total-patches 2>/dev/null || echo 0)
+          # Count the per-patch blocks actually written to the comment.
+          REVIEWED=$(grep -c '^## Patch ' "$COMMENT" || true)
+          if [ "$TOTAL" -gt 0 ] && [ "$REVIEWED" -lt "$TOTAL" ]; then
+            printf '\n---\n\n> ⏱ **Review stopped at %d/%d patches.** The remaining patches were not reviewed.\n' \
+              "$REVIEWED" "$TOTAL" >> "$COMMENT"
+          fi
+
       - name: Post PR comment
-        if: github.event_name == 'pull_request' && hashFiles('sashiko-out/comment.md') != ''
+        if: always() && github.event_name == 'pull_request' && hashFiles('sashiko-out/comment.md') != ''
         uses: actions/github-script@v7
         with:
           script: |

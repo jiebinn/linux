@@ -64,6 +64,11 @@ git -C "$REPO_PATH" -c safe.bareRepository=all \
 
 echo "Reviewing $N commit(s) with $MODEL..."
 
+# Record the total patch count so an always()-guarded workflow step can tell,
+# even if this script is killed mid-run (timeout), how many of the N patches
+# were actually reviewed and annotate the partial comment accordingly.
+echo "$N" > "$OUTPUT_DIR/total-patches"
+
 {
     printf '# Sashiko review\n\n'
     printf 'Model: `%s`  \n' "$MODEL"
@@ -103,27 +108,35 @@ for i in "${!COMMITS[@]}"; do
         INLINE=$(jq -r '.inline_review // ""' "$OUTPUT")
         ERR=$(jq -r '.error // ""' "$OUTPUT")
 
+        # Determine failure status in the parent shell — the printf block below
+        # runs in a pipe subshell, so incrementing FAIL_COUNT inside it would be
+        # lost.
+        if [[ ( -n "$ERR" && "$ERR" != "null" ) || -z "$INLINE" || "$INLINE" == "null" ]]; then
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+        fi
+
+        # tee each patch's block to stdout as well as comment.md, so completed
+        # reviews are visible in the live workflow log even if the job is killed
+        # (timeout/OOM) before the final "post comment" step runs.
         {
             printf '\n---\n\n## Patch %d/%d — `%s`\n\n' "$IDX" "$N" "${SHA:0:12}"
             printf '**%s**\n\n' "$SUBJ"
             if [[ -n "$ERR" && "$ERR" != "null" ]]; then
                 printf '> Sashiko error: `%s`\n' "$ERR"
-                FAIL_COUNT=$((FAIL_COUNT + 1))
             elif [[ -z "$INLINE" || "$INLINE" == "null" ]]; then
                 printf '_No review output._\n'
-                FAIL_COUNT=$((FAIL_COUNT + 1))
             elif [[ "$INLINE" == "No issues found." ]]; then
                 printf '%s\n' "$INLINE"
             else
                 printf '```\n%s\n```\n' "$INLINE"
             fi
-        } >> "$OUTPUT_DIR/comment.md"
+        } | tee -a "$OUTPUT_DIR/comment.md"
     else
         echo "review binary exited non-zero for $SHA" >&2
         {
             printf '\n---\n\n## Patch %d/%d — `%s`\n\n' "$IDX" "$N" "${SHA:0:12}"
             printf '_Review crashed — see workflow logs._\n'
-        } >> "$OUTPUT_DIR/comment.md"
+        } | tee -a "$OUTPUT_DIR/comment.md"
         FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
 done
