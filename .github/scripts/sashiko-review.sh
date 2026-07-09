@@ -25,6 +25,17 @@ if (( N == 0 )); then
     exit 0
 fi
 
+# Honor an optional partial-review directive (review-num-commits /
+# review-git-range) from the PR body or a workflow input. This may narrow
+# COMMITS to a subset, or skip the review entirely on an invalid directive.
+TOTAL_PR_COMMITS=$N
+# shellcheck source=select-commits.sh
+source "$(dirname "$0")/select-commits.sh"
+SKIP_PREFIX=SASHIKO
+select_commits "${COMMITS[@]}"
+COMMITS=("${SELECTED_COMMITS[@]}")
+N=${#COMMITS[@]}
+
 if (( N > MAX_PATCHES )); then
     {
         printf '**Sashiko review skipped:** this PR has %d commits, exceeding the limit of %d.\n\n' "$N" "$MAX_PATCHES"
@@ -73,7 +84,12 @@ echo "$N" > "$OUTPUT_DIR/total-patches"
     printf '# Sashiko review\n\n'
     printf 'Model: `%s`  \n' "$MODEL"
     printf 'Base: `%s`  \n' "$BASE_SHA"
-    printf 'Head: `%s`  \n\n' "$HEAD_SHA"
+    printf 'Head: `%s`  \n' "$HEAD_SHA"
+    if [[ -n "${REVIEW_SELECTION:-}" ]]; then
+        printf 'Partial review: %s — %d of %d commits  \n' \
+            "$REVIEW_SELECTION" "$N" "$TOTAL_PR_COMMITS"
+    fi
+    printf '\n'
 } > "$OUTPUT_DIR/comment.md"
 
 FAIL_COUNT=0

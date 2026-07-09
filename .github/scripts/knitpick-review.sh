@@ -27,6 +27,26 @@ if (( N == 0 )); then
     exit 0
 fi
 
+# Honor an optional partial-review directive (review-num-commits /
+# review-git-range) from the PR body or a workflow input. The knitpick CLI runs
+# once over a range, so collapse the selected commits back into an effective
+# base..head; a full review leaves RANGE_BASE/RANGE_HEAD at the PR's own SHAs.
+TOTAL_PR_COMMITS=$N
+# shellcheck source=select-commits.sh
+source "$(dirname "$0")/select-commits.sh"
+SKIP_PREFIX=KNITPICK
+select_commits "${COMMITS[@]}"
+N=${#SELECTED_COMMITS[@]}
+if [[ -n "$REVIEW_SELECTION" ]]; then
+    RANGE_BASE="$SELECTED_BASE"
+    RANGE_HEAD="$SELECTED_HEAD"
+else
+    # Full review: keep the PR's own base/head verbatim (SELECTED_BASE would be
+    # an equivalent "<first-commit>^" but is noisier in the prompt/header).
+    RANGE_BASE="$BASE_SHA"
+    RANGE_HEAD="$HEAD_SHA"
+fi
+
 if (( N > MAX_PATCHES )); then
     {
         printf '**Knitpick review skipped:** this PR has %d commits, exceeding the limit of %d.\n\n' "$N" "$MAX_PATCHES"
@@ -53,7 +73,7 @@ Read the nit-pick review prompt at $NITPICK_PROMPT and follow it exactly. The
 prompt directory (for any files it references relatively, such as
 subsystem/subsystem-nits.md and inline-template.md) is $PROMPTS_DIR.
 
-Review the patch series in the commit range $BASE_SHA..$HEAD_SHA. Use git
+Review the patch series in the commit range $RANGE_BASE..$RANGE_HEAD. Use git
 (git log, git show, git format-patch) to read the diffs and commit messages for
 those commits. Treat them as the patch series under review.
 
@@ -87,8 +107,13 @@ fi
     printf 'The AI nitpicker is highly committed to its job and never stops nitpicking. \n'
     printf 'Please use your discretion to stop iterating on reported issues.\n\n'
     printf 'Model: `%s`  \n' "$MODEL"
-    printf 'Base: `%s`  \n' "$BASE_SHA"
-    printf 'Head: `%s`  \n\n' "$HEAD_SHA"
+    printf 'Base: `%s`  \n' "$RANGE_BASE"
+    printf 'Head: `%s`  \n' "$RANGE_HEAD"
+    if [[ -n "${REVIEW_SELECTION:-}" ]]; then
+        printf 'Partial review: %s — %d of %d commits  \n' \
+            "$REVIEW_SELECTION" "$N" "$TOTAL_PR_COMMITS"
+    fi
+    printf '\n'
     printf -- '---\n\n'
 
     if [[ -s "$INLINE_FILE" ]]; then

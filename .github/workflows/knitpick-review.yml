@@ -8,6 +8,12 @@ on:
         description: "Max patches to review before aborting"
         required: false
         default: "35"
+      review_num_commits:
+        description: "Review only the last N commits (blank = all)"
+        required: false
+      review_git_range:
+        description: "Review only patches in this git range (sha..sha; blank = all)"
+        required: false
 
 permissions:
   contents: read
@@ -89,6 +95,11 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           OUTPUT_DIR: ${{ github.workspace }}/knitpick-out
+          # Partial-review directives: a workflow_dispatch input wins; otherwise
+          # the script parses the PR body for review-num-commits / review-git-range.
+          PR_BODY: ${{ github.event.pull_request.body }}
+          REVIEW_NUM_COMMITS: ${{ github.event.inputs.review_num_commits || '' }}
+          REVIEW_GIT_RANGE: ${{ github.event.inputs.review_git_range || '' }}
         run: |
           .github/scripts/knitpick-review.sh
         working-directory: kernel

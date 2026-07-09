@@ -8,6 +8,12 @@ on:
         description: "Max patches to review before aborting"
         required: false
         default: "35"
+      review_num_commits:
+        description: "Review only the last N commits (blank = all)"
+        required: false
+      review_git_range:
+        description: "Review only patches in this git range (sha..sha; blank = all)"
+        required: false
       sashiko_tag:
         description: "Sashiko tag to pin (e.g. v.0.2.1) — overrides the repo variable for this run; blank uses the latest tag"
         required: false
@@ -191,6 +197,11 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           OUTPUT_DIR: ${{ github.workspace }}/sashiko-out
+          # Partial-review directives: a workflow_dispatch input wins; otherwise
+          # the script parses the PR body for review-num-commits / review-git-range.
+          PR_BODY: ${{ github.event.pull_request.body }}
+          REVIEW_NUM_COMMITS: ${{ github.event.inputs.review_num_commits || '' }}
+          REVIEW_GIT_RANGE: ${{ github.event.inputs.review_git_range || '' }}
           SASHIKO_LOG_PLAIN: "1"
           RUST_LOG: info
         run: |
