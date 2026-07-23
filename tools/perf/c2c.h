@@ -148,6 +148,7 @@ bool c2c_fmt_equal(struct perf_hpp_fmt *a, struct perf_hpp_fmt *b);
  */
 #ifdef HAVE_SLANG_SUPPORT
 int perf_c2c__browse_cacheline(struct hist_entry *he);
+int perf_c2c__browse_function_view(struct hists *hists);
 #endif
 
 #endif /* _PERF_C2C_H_ */
