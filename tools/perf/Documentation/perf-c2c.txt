@@ -365,6 +365,52 @@ TUI OUTPUT
 The TUI output provides interactive interface to navigate
 through cachelines list and to display offset details.
 
+Pressing the 'TAB' key in the cacheline view switches to the function
+view.  The function view shows a three-level hierarchy of the same data,
+organized around functions rather than cachelines.  Every level shows
+functions and cachelines only -- code addresses are not shown here; they
+remain available in the per-cacheline detail view ('d').
+
+  Level 1: the read-side function, sorted by Cycles % (estimated load
+           cycles: HITM, peer-snoop and other-load cycles -- on systems
+           whose default display mode is peer, such as Arm64, the
+           peer-snoop component dominates)
+  Level 2: the functions that write the shared lines, causing the
+           level-1 function's HITMs, sorted by store count
+  Level 3: the specific cachelines where the two functions contend
+
+Each function aggregates all of its code addresses into a single entry,
+and a level-2 writer aggregates all of the cachelines it contends over,
+so a contending pair is a single row with its total shown -- there is no
+need to sum a writer's traffic across cachelines by hand.
+
+In the function view the 'd' key opens the detail view of the selected
+cacheline, 'e'/'+' expands or collapses the current entry, and 'TAB',
+'ESC' or 'q' returns to the cacheline view.
+
+For example, expanding a level-1 function reveals the functions that write
+the lines it reads, and expanding one of those reveals the specific shared
+cachelines:
+
+  Shared Data Functions Table     (18 entries, sorted on Cycles %)
+     Cycles    Store
+          %    count  Function / Contending function / Cacheline
+  ----------------------------------------------------------------------
+  -  16.54%      419  - [k] dequeue_pushable_task
+                 145    - [k] pull_rt_task
+                 145        0xff2d0082809da080
+                 139    - [k] enqueue_pushable_task
+                  70        0xff2d00a2071f9640
+                  69        0xff2d0082809da000
+
+Here dequeue_pushable_task pays the read-side HITM penalty (16.54% of the
+estimated load cycles).  It is contended by pull_rt_task and
+enqueue_pushable_task, which write the shared lines; enqueue_pushable_task
+contends over two cachelines but stays a single row with its total (139)
+shown, and the individual cachelines are underneath.  This is the
+false-sharing chain that the cacheline view otherwise leaves to be
+reconstructed by hand.
+
 For details please refer to the help window by pressing '?' key.
 
 CREDITS
