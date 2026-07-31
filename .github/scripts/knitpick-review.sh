@@ -50,9 +50,11 @@ fi
 if (( N > MAX_PATCHES )); then
     {
         printf '**Knitpick review skipped:** this PR has %d commits, exceeding the limit of %d.\n\n' "$N" "$MAX_PATCHES"
-        printf 'Large series take a long time and consume significant model budget. Options:\n'
-        printf '1. **Check that your PR base branch is correct.** A common cause of an inflated commit count is branching from the wrong base, which pulls in unrelated upstream commits.\n'
-        printf '2. **Split the series into smaller PRs and resubmit.**\n'
+        printf 'Large series take a long time and consume significant model budget. \n'
+        printf '**Check that your PR base is correct.** A common cause of an inflated commit count is branching from the wrong base, which pulls in unrelated upstream commits.\n'
+        printf 'If your commits are based on another base use one of the following options to review a subset of the commits: \n\n'
+        printf '    review-num-commits: <n>          review only the last <n> commits\n'
+        printf '    review-git-range:   <sha>..<sha> review only that range (must be subset of PR)\n\n'
     } > "$OUTPUT_DIR/comment.md"
     exit 0
 fi
