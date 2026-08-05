@@ -3,6 +3,7 @@
 #define _PERF_C2C_H_ 1
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <linux/types.h>
 #include "util/stat.h"
 #include "util/hist.h"
@@ -64,6 +65,7 @@ struct perf_c2c {
 	bool			 show_all;
 	bool			 use_stdio;
 	bool			 stats_only;
+	bool			 function_view;
 	bool			 symbol_full;
 	bool			 stitch_lbr;
 
@@ -130,6 +132,8 @@ struct c2c_fmt {
 
 void c2c_fmt_free(struct perf_hpp_fmt *fmt);
 bool c2c_fmt_equal(struct perf_hpp_fmt *a, struct perf_hpp_fmt *b);
+bool perf_c2c__function_view_has_iaddr(void);
+int perf_c2c__function_view_fprintf(FILE *out);
 
 /*
  * The TUI browsers are only built with SLANG support. The stubs below keep

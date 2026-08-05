@@ -13,6 +13,7 @@
 
 #include <errno.h>
 #include <inttypes.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ttydefaults.h>
@@ -21,10 +22,13 @@
 #include <linux/rbtree.h>
 #include <linux/zalloc.h>
 
+#ifdef HAVE_SLANG_SUPPORT
 #include "../browser.h"
 #include "../keysyms.h"
 #include "../libslang.h"
 #include "../ui.h"
+#include "hists.h"
+#endif
 #include "../../util/addr_location.h"
 #include "../../util/cacheline.h"
 #include "../../util/debug.h"
@@ -37,7 +41,6 @@
 #include "../../util/symbol.h"
 #include "../../util/thread.h"
 #include "../../c2c.h"
-#include "hists.h"
 
 struct perf_c2c_ext {
 	struct c2c_hists	function_hists;
@@ -47,10 +50,12 @@ struct perf_c2c_ext {
 
 static struct perf_c2c_ext c2c_ext;
 
+#ifdef HAVE_SLANG_SUPPORT
 struct c2c_function_browser {
 	struct hist_browser	hb;
 	unsigned int		(*orig_refresh)(struct ui_browser *browser);
 };
+#endif
 
 static inline u64 c2c_hitm_count(const struct c2c_stats *stats)
 {
@@ -312,8 +317,8 @@ symbol_view_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		char symbuf[32];
 
 		scnprintf(symbuf, sizeof(symbuf), "0x%" PRIx64, addr);
-		ret += scnprintf(hpp->buf + ret, hpp->size - ret, "%-*.*s",
-				 text_width, text_width, symbuf);
+		ret += scnprintf(hpp->buf + ret, hpp->size - ret, "%.*s",
+				 text_width, symbuf);
 	} else {
 		/* Level 1 and level 2 are both functions. */
 		size_t cell_size;
@@ -338,9 +343,6 @@ symbol_view_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 			len = min_t(size_t, len, cell_size - 1);
 
 		ret += len;
-		if (len < text_width)
-			ret += scnprintf(hpp->buf + ret, hpp->size - ret, "%*s",
-					 text_width - len, "");
 	}
 
 	return ret;
@@ -1418,6 +1420,7 @@ static void c2c_function__update_symbol_width(struct hist_entry *he)
 		hists__set_col_len(hists, HISTC_SYMBOL, need);
 }
 
+#ifdef HAVE_SLANG_SUPPORT
 /*
  * Count visible entries in @root, descending only through visible, unfolded
  * parents. Match hists__filter_entries(), which drives generic browser
@@ -1469,6 +1472,7 @@ static unsigned int c2c_function_browser__refresh(struct ui_browser *ui_browser)
 	c2c_function_browser__update_nr_entries(browser);
 	return browser->orig_refresh(ui_browser);
 }
+#endif
 
 /*
  * Prune writers with no stores, drop functions left with no contending
@@ -1621,6 +1625,63 @@ out_err:
 	return ret;
 }
 
+bool perf_c2c__function_view_has_iaddr(void)
+{
+	const char *field = c2c.cl_sort;
+
+	while (field && *field) {
+		const char *end = strchr(field, ',');
+		size_t len = end ? (size_t)(end - field) : strlen(field);
+
+		if (len == sizeof("iaddr") - 1 && !strncmp(field, "iaddr", len))
+			return true;
+		field = end ? end + 1 : NULL;
+	}
+	return false;
+}
+
+static void c2c_function__unfold_all(struct rb_root_cached *root)
+{
+	struct rb_node *nd;
+
+	for (nd = rb_first_cached(root); nd; nd = rb_next(nd)) {
+		struct hist_entry *he = rb_entry(nd, struct hist_entry, rb_node);
+
+		if (!he->has_children)
+			continue;
+		he->unfolded = true;
+		c2c_function__unfold_all(&he->hroot_out);
+	}
+}
+
+int perf_c2c__function_view_fprintf(FILE *out)
+{
+	bool saved_use_callchain = symbol_conf.use_callchain;
+	int ret;
+
+	/* Callers other than the c2c report command may skip the CLI check. */
+	if (!perf_c2c__function_view_has_iaddr()) {
+		pr_err("The function view requires iaddr in --coalesce.\n");
+		return -EINVAL;
+	}
+
+	/* Function rows aggregate samples and never display callchains. */
+	symbol_conf.use_callchain = false;
+	ret = build_function_view_hierarchy();
+	if (ret) {
+		pr_err("Failed to build function view hierarchy (ret=%d)\n", ret);
+		goto out;
+	}
+
+	c2c_function__unfold_all(&c2c_ext.function_hists.hists.entries);
+	hists__fprintf(&c2c_ext.function_hists.hists, true, 0, 0, 0, out, true);
+	c2c_function_hists__reset();
+out:
+	symbol_conf.use_callchain = saved_use_callchain;
+	return ret;
+}
+
+#ifdef HAVE_SLANG_SUPPORT
 static int c2c_function_browser__title(struct hist_browser *browser,
 				       char *bf, size_t size)
 {
@@ -1690,21 +1751,6 @@ static int c2c_function_browser__browse_cacheline_detail(struct hist_entry *he_s
 	return -1;
 }
 
-static bool c2c_function__has_iaddr(void)
-{
-	const char *field = c2c.cl_sort;
-
-	while (field && *field) {
-		const char *end = strchr(field, ',');
-		size_t len = end ? (size_t)(end - field) : strlen(field);
-
-		if (len == sizeof("iaddr") - 1 && !strncmp(field, "iaddr", len))
-			return true;
-		field = end ? end + 1 : NULL;
-	}
-	return false;
-}
-
 /*
  * perf_c2c__browse_function_view - Browse function view with TAB key support
  *
@@ -1720,7 +1766,7 @@ int perf_c2c__browse_function_view(void)
 	" e/+           Expand/collapse the selected entry\n"
 	" TAB/ESC/q/^C  Return to the cacheline view\n";
 
-	if (!c2c_function__has_iaddr()) {
+	if (!perf_c2c__function_view_has_iaddr()) {
 		ui__warning("The function view requires iaddr in --coalesce.\n");
 		return -EINVAL;
 	}
@@ -1781,3 +1827,4 @@ out:
 	symbol_conf.use_callchain = saved_use_callchain;
 	return ret;
 }
+#endif
