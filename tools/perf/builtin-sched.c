@@ -169,6 +169,7 @@ enum thread_state {
 struct work_atom {
 	struct list_head	list;
 	enum thread_state	state;
+	bool			from_wakeup;
 	u64			sched_out_time;
 	u64			wake_up_time;
 	u64			sched_in_time;
@@ -386,7 +387,9 @@ struct thread_runtime {
 	u64 dt_preempt;     /* time between CPU access by preempt (off cpu) */
 	u64 dt_delay;       /* time between wakeup and sched-in */
 	u64 dt_pre_mig;     /* time between migration and wakeup */
-	u64 ready_to_run;   /* time of wakeup */
+	u64 ready_to_run;   /* time of wakeup or runnable switch-out */
+	bool ready_from_wakeup;
+	bool on_cpu;
 	u64 migrated;	    /* time when a thread is migrated */
 
 	struct stats run_stats;
@@ -1246,6 +1249,7 @@ add_sched_out_event(struct work_atoms *atoms,
 
 reuse:
 	atom->sched_out_time = timestamp;
+	atom->from_wakeup = false;
 
 	if (run_state == 'R') {
 		atom->state = THREAD_WAIT_CPU;
@@ -1492,7 +1496,12 @@ static int latency_wakeup_event(struct perf_sched *sched,
 	 * one CPU, or are only looking at only one, so don't
 	 * skip in this case.
 	 */
-	if (sched->profile_cpu == -1 && atom->state != THREAD_SLEEPING)
+	/* A runnable switch-out already gives this wait its start time. */
+	if (sched->profile_cpu == -1 && atom->state == THREAD_WAIT_CPU &&
+	    !atom->from_wakeup)
+		goto out_ok;
+	if (sched->profile_cpu == -1 && atom->state != THREAD_SLEEPING &&
+	    atom->state != THREAD_WAIT_CPU)
 		goto out_ok;
 
 	sched->nr_timestamps++;
@@ -1502,6 +1511,7 @@ static int latency_wakeup_event(struct perf_sched *sched,
 	}
 
 	atom->state = THREAD_WAIT_CPU;
+	atom->from_wakeup = true;
 	atom->wake_up_time = timestamp;
 out_ok:
 	err = 0;
@@ -2929,8 +2939,11 @@ static int timehist_sched_wakeup_event(const struct perf_tool *tool,
 		return -1;
 	}
 
-	if (tr->ready_to_run == 0)
+	/* A running task has not yet consumed its previous wait timestamp. */
+	if (!tr->on_cpu && (!tr->ready_to_run || tr->ready_from_wakeup)) {
 		tr->ready_to_run = sample->time;
+		tr->ready_from_wakeup = true;
+	}
 
 	/* show wakeups if requested */
 	if (sched->show_wakeups &&
@@ -3090,8 +3103,13 @@ static int timehist_sched_change_event(const struct perf_tool *tool,
 		goto out;
 	}
 
-	if (timehist_skip_sample(sched, thread, sample))
+	if (timehist_skip_sample(sched, thread, sample)) {
+		struct thread_runtime *skipped_tr = thread__priv(thread);
+
+		if (skipped_tr)
+			skipped_tr->on_cpu = false;
 		goto out;
+	}
 
 	tr = thread__get_runtime(thread);
 	if (tr == NULL) {
@@ -3191,6 +3209,7 @@ out:
 		sched->hist_time.end = t;
 
 	if (tr) {
+		tr->on_cpu = false;
 		/* time of this sched_switch event becomes last time task seen */
 		tr->last_time = sample->time;
 
@@ -3202,11 +3221,24 @@ out:
 			tr->ready_to_run = t;
 		else
 			tr->ready_to_run = 0;
+		tr->ready_from_wakeup = false;
 
 		tr->migrated = 0;
 	}
 
 	evsel__save_time(sample->evsel, sample->time, sample->cpu);
+	if (perf_sample__intval(sample, "next_pid")) {
+		struct thread *next = machine__find_thread(machine, -1,
+				perf_sample__intval(sample, "next_pid"));
+		struct thread_runtime *next_tr;
+
+		if (next) {
+			next_tr = thread__priv(next);
+			if (next_tr)
+				next_tr->on_cpu = true;
+			thread__put(next);
+		}
+	}
 
 	thread__put(thread);
 	addr_location__exit(&al);
