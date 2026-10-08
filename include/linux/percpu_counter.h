@@ -19,8 +19,36 @@
 
 #ifdef CONFIG_SMP
 
+/*
+ * Non-RT rwlocks allow concurrent sums. PREEMPT_RT rwlocks can sleep,
+ * so keep raw spinlocks for updates from atomic contexts.
+ */
+#ifdef CONFIG_PREEMPT_RT
+#define percpu_counter_lock_t			raw_spinlock_t
+#define percpu_counter_lock_init			raw_spin_lock_init
+#define percpu_counter_write_lock		raw_spin_lock
+#define percpu_counter_write_unlock		raw_spin_unlock
+#define percpu_counter_write_lock_irqsave	raw_spin_lock_irqsave
+#define percpu_counter_write_unlock_irqrestore	raw_spin_unlock_irqrestore
+#define percpu_counter_read_lock_irqsave		raw_spin_lock_irqsave
+#define percpu_counter_read_unlock_irqrestore	raw_spin_unlock_irqrestore
+#define percpu_counter_lock_set_class(lock, key)	lockdep_set_class(lock, key)
+#else
+#define percpu_counter_lock_t			rwlock_t
+#define percpu_counter_lock_init			rwlock_init
+#define percpu_counter_write_lock		write_lock
+#define percpu_counter_write_unlock		write_unlock
+#define percpu_counter_write_lock_irqsave	write_lock_irqsave
+#define percpu_counter_write_unlock_irqrestore	write_unlock_irqrestore
+#define percpu_counter_read_lock_irqsave		read_lock_irqsave
+#define percpu_counter_read_unlock_irqrestore	read_unlock_irqrestore
+#define percpu_counter_lock_set_class(lock, key)				\
+	lockdep_init_map_wait(&(lock)->dep_map, #key, key, 0,		\
+			      LD_WAIT_SPIN)
+#endif
+
 struct percpu_counter {
-	raw_spinlock_t lock;
+	percpu_counter_lock_t lock;
 	s64 count;
 #ifdef CONFIG_HOTPLUG_CPU
 	struct list_head list;	/* All percpu_counters are on a list */
