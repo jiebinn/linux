@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "builtin.h"
+#include "builtin-sched-waits.h"
 #include "perf.h"
 #include "perf-sys.h"
 
@@ -5448,7 +5449,7 @@ int cmd_sched(int argc, const char **argv)
 	};
 	const char *const sched_subcommands[] = { "record", "latency", "map",
 						  "replay", "script",
-						  "timehist", "stats", NULL };
+						  "timehist", "stats", "waits", NULL };
 	const char *sched_usage[] = {
 		NULL,
 		NULL
@@ -5469,6 +5470,10 @@ int cmd_sched(int argc, const char **argv)
 	};
 	struct trace_sched_handler stats_ops  = {};
 	int ret;
+
+	/* The waits command owns its state and never enters the legacy paths. */
+	if (argc > 1 && !strcmp(argv[1], "waits"))
+		return cmd_sched_waits(argc - 2, argv + 2);
 
 	perf_tool__init(&sched.tool, /*ordered_events=*/true);
 	sched.tool.sample	 = perf_sched__process_tracepoint_sample;

@@ -8,11 +8,30 @@ perf-sched - Tool to trace/measure scheduler properties (latencies)
 SYNOPSIS
 --------
 [verse]
-'perf sched' {record|latency|map|replay|script|timehist|stats}
+'perf sched' {record|latency|map|replay|script|timehist|stats|waits}
 
 DESCRIPTION
 -----------
 There are several variants of 'perf sched':
+
+  'perf sched waits report' investigates individual scheduling tail
+  delays. Existing latency statistics combine waits by task, while
+  timehist requires manual event matching to inspect an outlier.
+  This command ranks completed waits across all tasks, reports wakeup
+  and ready timestamps when both events were recorded, and marks gaps
+  in the recorded CPU history. It shows observed CPU running context
+  without assigning blame. It uses a separate analysis path from the
+  existing sched commands. Record both wakeup tracepoints explicitly:
+
+      perf record -a -R -m 1024 -c 1 -o sched.data \
+        -e sched:sched_switch -e sched:sched_waking \
+        -e sched:sched_wakeup -e sched:sched_wakeup_new \
+        -e sched:sched_migrate_task -e sched:sched_process_fork \
+        -- <workload> [arguments]
+      perf sched waits report -i sched.data --top 20
+
+  --time excludes intervals crossing the selected time boundary.
+  Target CPU running context requires a seekable perf.data input.
 
   'perf sched record <command>' to record the scheduling events
   of an arbitrary workload.
@@ -498,6 +517,34 @@ OPTIONS for 'perf sched timehist'
 	and is migrated to a different runqueue where it is finally run. This
 	time between sched_wakeup and migrate_task is the pre-migration wait
 	time.
+
+OPTIONS for 'perf sched waits report'
+-------------------------------------
+
+-i::
+--input=<file>::
+	Read the given perf.data file (default: perf.data).
+
+--top=<N>::
+	Show the longest N completed waits, from 1 to 1000 (default: 20).
+
+-t::
+--tid=<tid[,tid...]>::
+	Select waiting thread IDs.
+
+-C::
+--cpu=<cpu>::
+	Select the CPU where the waiting task eventually ran.
+
+--comm=<name>::
+	Select an exact task name.
+
+--time=<start,stop>::
+	Select waits entirely inside the time interval.
+
+-f::
+--force::
+	Read a possibly damaged input file.
 
 OPTIONS for 'perf sched replay'
 ------------------------------

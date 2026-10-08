@@ -27,6 +27,7 @@ perf-$(CONFIG_LIBTRACEEVENT) += builtin-kmem.o
 perf-$(CONFIG_LIBTRACEEVENT) += builtin-kwork.o
 perf-$(CONFIG_LIBTRACEEVENT) += builtin-lock.o
 perf-$(CONFIG_LIBTRACEEVENT) += builtin-sched.o
+perf-$(CONFIG_LIBTRACEEVENT) += builtin-sched-waits.o
 perf-$(CONFIG_LIBTRACEEVENT) += builtin-timechart.o
 
 ifeq ($(CONFIG_LIBTRACEEVENT),y)
