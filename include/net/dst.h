@@ -17,6 +17,7 @@
 #include <linux/jiffies.h>
 #include <linux/refcount.h>
 #include <linux/rcuref.h>
+#include <linux/cache.h>
 #include <net/neighbour.h>
 #include <asm/processor.h>
 #include <linux/indirect_call_wrapper.h>
@@ -61,8 +62,13 @@ struct dst_entry {
 #define DST_OBSOLETE_DEAD	2
 #define DST_OBSOLETE_FORCE_CHK	-1
 #define DST_OBSOLETE_KILL	-2
+#if defined(CONFIG_SMP) && defined(CONFIG_64BIT) && \
+	defined(CONFIG_IP_ROUTE_CLASSID) && SMP_CACHE_BYTES == 64
+	__u32			tclassid;
+#else
 	unsigned short		header_len;	/* more space at head required */
 	unsigned short		trailer_len;	/* space to reserve at tail */
+#endif
 
 	/*
 	 * __rcuref wants to be on a different cache line from
@@ -76,7 +82,10 @@ struct dst_entry {
 	struct rcu_head		rcu_head;
 	short			error;
 	short			__pad;
+#if !defined(CONFIG_SMP) || !defined(CONFIG_64BIT) || \
+	!defined(CONFIG_IP_ROUTE_CLASSID) || SMP_CACHE_BYTES != 64
 	__u32			tclassid;
+#endif
 #ifndef CONFIG_64BIT
 	struct lwtunnel_state   *lwtstate;
 	rcuref_t		__rcuref;	/* 32-bit offset 64 */
@@ -94,6 +103,11 @@ struct dst_entry {
 	struct uncached_list	*rt_uncached_list;
 #ifdef CONFIG_64BIT
 	struct lwtunnel_state   *lwtstate;
+#if defined(CONFIG_SMP) && defined(CONFIG_IP_ROUTE_CLASSID) && \
+	SMP_CACHE_BYTES == 64
+	unsigned short		header_len;	/* more space at head required */
+	unsigned short		trailer_len;	/* space to reserve at tail */
+#endif
 #endif
 };
 
