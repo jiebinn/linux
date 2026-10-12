@@ -61,22 +61,22 @@ struct dst_entry {
 #define DST_OBSOLETE_DEAD	2
 #define DST_OBSOLETE_FORCE_CHK	-1
 #define DST_OBSOLETE_KILL	-2
-	unsigned short		header_len;	/* more space at head required */
-	unsigned short		trailer_len;	/* space to reserve at tail */
-
+	__u32			tclassid;
 	/*
 	 * __rcuref wants to be on a different cache line from
 	 * input/output/ops or performance tanks badly
 	 */
 #ifdef CONFIG_64BIT
 	rcuref_t		__rcuref;	/* 64-bit offset 64 */
+#else
+	unsigned short		header_len;	/* more space at head required */
+	unsigned short		trailer_len;	/* space to reserve at tail */
 #endif
 	int			__use;
 	unsigned long		lastuse;
 	struct rcu_head		rcu_head;
 	short			error;
 	short			__pad;
-	__u32			tclassid;
 #ifndef CONFIG_64BIT
 	struct lwtunnel_state   *lwtstate;
 	rcuref_t		__rcuref;	/* 32-bit offset 64 */
@@ -94,6 +94,8 @@ struct dst_entry {
 	struct uncached_list	*rt_uncached_list;
 #ifdef CONFIG_64BIT
 	struct lwtunnel_state   *lwtstate;
+	unsigned short		header_len;	/* more space at head required */
+	unsigned short		trailer_len;	/* space to reserve at tail */
 #endif
 };
 
