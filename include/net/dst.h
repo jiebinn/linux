@@ -61,12 +61,12 @@ struct dst_entry {
 #define DST_OBSOLETE_DEAD	2
 #define DST_OBSOLETE_FORCE_CHK	-1
 #define DST_OBSOLETE_KILL	-2
+	__u32			tclassid;
 	/*
 	 * __rcuref wants to be on a different cache line from
 	 * input/output/ops or performance tanks badly
 	 */
 #ifdef CONFIG_64BIT
-	__u32			tclassid;
 	rcuref_t		__rcuref;	/* 64-bit offset 64 */
 #else
 	unsigned short		header_len;	/* more space at head required */
@@ -78,7 +78,6 @@ struct dst_entry {
 	short			error;
 	short			__pad;
 #ifndef CONFIG_64BIT
-	__u32			tclassid;
 	struct lwtunnel_state   *lwtstate;
 	rcuref_t		__rcuref;	/* 32-bit offset 64 */
 #endif
