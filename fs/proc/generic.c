@@ -289,7 +289,8 @@ struct dentry *proc_lookup(struct inode *dir, struct dentry *dentry,
 int proc_readdir_de(struct file *file, struct dir_context *ctx,
 		    struct proc_dir_entry *de)
 {
-	int i;
+	struct proc_dir_entry *entries[16];
+	int i, nr;
 
 	if (!dir_emit_dots(file, ctx))
 		return 0;
@@ -309,19 +310,32 @@ int proc_readdir_de(struct file *file, struct dir_context *ctx,
 	}
 
 	do {
-		struct proc_dir_entry *next;
-		pde_get(de);
+		/* Pin a bounded batch before dir_emit() can fault or sleep. */
+		nr = 0;
+		do {
+			pde_get(de);
+			entries[nr++] = de;
+			de = pde_subdir_next(de);
+		} while (de && nr < ARRAY_SIZE(entries));
 		read_unlock(&proc_subdir_lock);
-		if (!dir_emit(ctx, de->name, de->namelen,
-			    de->low_ino, de->mode >> 12)) {
-			pde_put(de);
-			return 0;
+
+		for (i = 0; i < nr; i++) {
+			de = entries[i];
+			if (!dir_emit(ctx, de->name, de->namelen,
+				      de->low_ino, de->mode >> 12)) {
+				while (i < nr)
+					pde_put(entries[i++]);
+				return 0;
+			}
+			ctx->pos++;
+			/* Keep the final entry alive as the traversal cursor. */
+			if (i != nr - 1)
+				pde_put(de);
 		}
-		ctx->pos++;
+
 		read_lock(&proc_subdir_lock);
-		next = pde_subdir_next(de);
-		pde_put(de);
-		de = next;
+		de = pde_subdir_next(entries[nr - 1]);
+		pde_put(entries[nr - 1]);
 	} while (de);
 	read_unlock(&proc_subdir_lock);
 	return 1;
