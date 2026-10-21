@@ -168,10 +168,11 @@ static int apparmor_capget(const struct task_struct *target, kernel_cap_t *effec
 {
 	struct aa_label *label;
 	const struct cred *cred;
+	bool needput;
 
 	rcu_read_lock();
 	cred = __task_cred(target);
-	label = aa_get_newest_cred_label(cred);
+	label = aa_get_newest_cred_label_condref(cred, &needput);
 
 	/*
 	 * cap_capget is stacked ahead of this and will
@@ -189,8 +190,8 @@ static int apparmor_capget(const struct task_struct *target, kernel_cap_t *effec
 			*permitted = cap_intersect(*permitted, allowed);
 		}
 	}
+	aa_put_label_condref(label, needput);
 	rcu_read_unlock();
-	aa_put_label(label);
 
 	return 0;
 }
