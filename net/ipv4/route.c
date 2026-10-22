@@ -1346,6 +1346,15 @@ void ip_rt_get_source(u8 *addr, struct sk_buff *skb, struct rtable *rt)
 }
 
 #ifdef CONFIG_IP_ROUTE_CLASSID
+static void rt_set_classid(struct rtable *rt, u32 classid)
+{
+	rt->dst.tclassid = classid;
+	if (classid)
+		rt->dst.flags |= DST_HAS_TCLASSID;
+	else
+		rt->dst.flags &= ~DST_HAS_TCLASSID;
+}
+
 static void set_class_tag(struct rtable *rt, u32 tag)
 {
 	if (!(rt->dst.tclassid & 0xFFFF))
@@ -1621,6 +1630,26 @@ static void rt_set_nexthop(struct rtable *rt, __be32 daddr,
 {
 	bool cached = false;
 
+#ifdef CONFIG_IP_ROUTE_CLASSID
+	/* Complete class-ID state before publishing the route in a cache. */
+	if (fi) {
+		struct fib_nh_common *nhc = FIB_RES_NHC(*res);
+
+		if (nhc->nhc_family == AF_INET) {
+			struct fib_nh *nh;
+
+			nh = container_of(nhc, struct fib_nh, nh_common);
+			rt->dst.tclassid = nh->nh_tclassid;
+		}
+	}
+#ifdef CONFIG_IP_MULTIPLE_TABLES
+	set_class_tag(rt, res->tclassid);
+#endif
+	set_class_tag(rt, itag);
+	if (rt->dst.tclassid)
+		rt->dst.flags |= DST_HAS_TCLASSID;
+#endif
+
 	if (fi) {
 		struct fib_nh_common *nhc = FIB_RES_NHC(*res);
 
@@ -1636,14 +1665,6 @@ static void rt_set_nexthop(struct rtable *rt, __be32 daddr,
 
 		ip_dst_init_metrics(&rt->dst, fi->fib_metrics);
 
-#ifdef CONFIG_IP_ROUTE_CLASSID
-		if (nhc->nhc_family == AF_INET) {
-			struct fib_nh *nh;
-
-			nh = container_of(nhc, struct fib_nh, nh_common);
-			rt->dst.tclassid = nh->nh_tclassid;
-		}
-#endif
 		rt->dst.lwtstate = lwtstate_get(nhc->nhc_lwtstate);
 		if (unlikely(fnhe))
 			cached = rt_bind_exception(rt, fnhe, daddr, do_cache);
@@ -1664,12 +1685,6 @@ static void rt_set_nexthop(struct rtable *rt, __be32 daddr,
 	} else
 		rt_add_uncached_list(rt);
 
-#ifdef CONFIG_IP_ROUTE_CLASSID
-#ifdef CONFIG_IP_MULTIPLE_TABLES
-	set_class_tag(rt, res->tclassid);
-#endif
-	set_class_tag(rt, itag);
-#endif
 }
 
 struct rtable *rt_dst_alloc(struct net_device *dev,
@@ -1794,7 +1809,7 @@ ip_route_input_mc(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 		return SKB_DROP_REASON_NOMEM;
 
 #ifdef CONFIG_IP_ROUTE_CLASSID
-	rth->dst.tclassid = itag;
+	rt_set_classid(rth, itag);
 #endif
 	rth->dst.output = ip_rt_bug;
 	rth->rt_is_input= 1;
@@ -2462,7 +2477,7 @@ local_input:
 
 	rth->dst.output= ip_rt_bug;
 #ifdef CONFIG_IP_ROUTE_CLASSID
-	rth->dst.tclassid = itag;
+	rt_set_classid(rth, itag);
 #endif
 	rth->rt_is_input = 1;
 

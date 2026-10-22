@@ -416,7 +416,7 @@ static int ip_rcv_finish_core(struct net *net,
 	}
 
 #ifdef CONFIG_IP_ROUTE_CLASSID
-	if (unlikely(skb_dst(skb)->tclassid)) {
+	if (unlikely(skb_dst(skb)->flags & DST_HAS_TCLASSID)) {
 		struct ip_rt_acct *st = this_cpu_ptr(ip_rt_acct);
 		u32 idx = skb_dst(skb)->tclassid;
 		st[idx&0xFF].o_packets++;

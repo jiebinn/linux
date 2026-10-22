@@ -71,7 +71,7 @@ void dst_init(struct dst_entry *dst, struct dst_ops *ops,
 	dst->rt_uncached_list = NULL;
 	dst->__use = 0;
 	dst->lastuse = jiffies;
-	dst->flags = flags;
+	dst->flags = flags & ~DST_HAS_TCLASSID;
 	if (!(flags & DST_NOCOUNT))
 		dst_entries_add(ops, 1);
 }
