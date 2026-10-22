@@ -1306,20 +1306,23 @@ static int apparmor_socket_post_create(struct socket *sock, int family,
 				       int type, int protocol, int kern)
 {
 	struct aa_label *label;
+	bool needput = true;
 
 	if (kern) {
 		label = aa_get_label(kernel_t);
 	} else
-		label = aa_get_current_label();
+		label = __begin_current_label_crit_section(&needput);
 
 	if (sock->sk) {
 		struct aa_sk_ctx *ctx = aa_sock(sock->sk);
 
 		/* still not live */
-		aa_put_label(rcu_dereference_protected(ctx->label, true));
-		rcu_assign_pointer(ctx->label, aa_get_label(label));
+		if (rcu_access_pointer(ctx->label) != label) {
+			aa_put_label(rcu_dereference_protected(ctx->label, true));
+			rcu_assign_pointer(ctx->label, aa_get_label(label));
+		}
 	}
-	aa_put_label(label);
+	__end_current_label_crit_section(label, needput);
 
 	return 0;
 }
