@@ -1025,10 +1025,10 @@ static int apparmor_task_kill(struct task_struct *target, struct kernel_siginfo 
 	const struct cred *tc;
 	struct aa_label *cl, *tl;
 	int error;
-	bool needput;
+	bool needput, tneedput;
 
 	tc = get_task_cred(target);
-	tl = aa_get_newest_cred_label(tc);
+	tl = aa_get_newest_cred_label_condref(tc, &tneedput);
 	if (cred) {
 		/*
 		 * Dealing with USB IO specific behavior
@@ -1041,7 +1041,7 @@ static int apparmor_task_kill(struct task_struct *target, struct kernel_siginfo 
 		error = aa_may_signal(current_cred(), cl, tc, tl, sig);
 		__end_current_label_crit_section(cl, needput);
 	}
-	aa_put_label(tl);
+	aa_put_label_condref(tl, tneedput);
 	put_cred(tc);
 
 	return error;
