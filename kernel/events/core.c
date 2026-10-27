@@ -450,6 +450,7 @@ static atomic_t perf_sched_count;
 static DEFINE_PER_CPU(struct pmu_event_list, pmu_sb_events);
 
 static atomic_t nr_mmap_events __read_mostly;
+static atomic_t nr_mmap_data_events __read_mostly;
 static atomic_t nr_comm_events __read_mostly;
 static atomic_t nr_namespaces_events __read_mostly;
 static atomic_t nr_task_events __read_mostly;
@@ -5625,6 +5626,8 @@ static void unaccount_event(struct perf_event *event)
 		dec = true;
 	if (event->attr.mmap || event->attr.mmap_data)
 		atomic_dec(&nr_mmap_events);
+	if (event->attr.mmap_data)
+		atomic_dec(&nr_mmap_data_events);
 	if (event->attr.build_id)
 		atomic_dec(&nr_build_id_events);
 	if (event->attr.comm)
@@ -9979,6 +9982,10 @@ void perf_event_mmap(struct vm_area_struct *vma)
 	if (!atomic_read(&nr_mmap_events))
 		return;
 
+	/* Non-executable mappings only match mmap_data listeners. */
+	if (!(vma->vm_flags & VM_EXEC) && !atomic_read(&nr_mmap_data_events))
+		return;
+
 	mmap_event = (struct perf_mmap_event){
 		.vma	= vma,
 		/* .file_name */
@@ -13277,6 +13284,8 @@ static void account_event(struct perf_event *event)
 		inc = true;
 	if (event->attr.mmap || event->attr.mmap_data)
 		atomic_inc(&nr_mmap_events);
+	if (event->attr.mmap_data)
+		atomic_inc(&nr_mmap_data_events);
 	if (event->attr.build_id)
 		atomic_inc(&nr_build_id_events);
 	if (event->attr.comm)
