@@ -5,6 +5,12 @@ capability. It adds no installed perf command and changes no perf build,
 legacy command path or structure. The scripts are experiment scaffolding,
 not a production perf implementation.
 
+**Archived after value assessment:** the current experiment has not shown
+enough incremental diagnostic value over existing counters to justify
+continued tool development. See [VALUE.md](VALUE.md). Evidence remains
+available; reconsider only if a concrete unresolved application incident
+requires per-wait correlation.
+
 ## The practical problem
 
 A container task can have long runnable waits even when its own cgroup
@@ -23,6 +29,15 @@ lacks cgroup throttling diagnostics.
 The question to answer is: **which of this task's waits overlapped CPU
 quota constraints, which ancestor supplied them, and for how long?**
 It is a measurement capability, not a different arrangement of delay rows.
+
+An important existing interface narrows the proposed value:
+`cpu.stat.local` reports actual runqueue throttling time, which may include
+inherited ancestor throttling. Its cumulative value can already expose
+inherited throttling even when `cpu.stat nr_throttled` is zero. This
+experiment did not capture that counter. The missing capability is the
+individual-task/interval/ancestor correlation, not basic detection of
+inherited throttling. See [VALUE.md](VALUE.md) for the application scope,
+existing alternatives and the decision before production development.
 
 ## Controlled observation
 
