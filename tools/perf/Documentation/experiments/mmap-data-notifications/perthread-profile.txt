@@ -1,0 +1,129 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 808  of event 'cycles:k'
+# Event count (approx.): 14229666757
+#
+# Overhead  Symbol                                     IPC   [IPC Coverage]
+# ........  .........................................  ....................
+#
+     8.28%  [k] should_flush_tlb                       -      -
+            |
+            ---smp_call_function_many_cond
+               on_each_cpu_cond_mask
+               flush_tlb_mm_range
+               tlb_finish_mmu
+               do_mprotect_pkey
+               __x64_sys_mprotect
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+
+     6.96%  [k] native_flush_tlb_one_user              -      -
+            |
+            ---flush_tlb_func
+               |
+               |--4.10%--smp_call_function_many_cond
+               |          on_each_cpu_cond_mask
+               |          flush_tlb_mm_range
+               |          tlb_finish_mmu
+               |          do_mprotect_pkey
+               |          __x64_sys_mprotect
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |
+                --2.86%--flush_tlb_mm_range
+                          tlb_finish_mmu
+                          do_mprotect_pkey
+                          __x64_sys_mprotect
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+
+     5.69%  [k] tlb_finish_mmu                         -      -
+            |
+            ---do_mprotect_pkey
+               __x64_sys_mprotect
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+
+     3.76%  [k] mas_wr_node_store                      -      -
+            |
+            ---mas_store_prealloc
+               |
+               |--2.63%--vma_complete
+               |          __split_vma
+               |          vma_modify
+               |          vma_modify_flags
+               |          mprotect_fixup
+               |          do_mprotect_pkey
+               |          __x64_sys_mprotect
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |
+                --1.13%--commit_merge
+                          vma_merge_existing_range
+                          vma_modify
+                          vma_modify_flags
+                          mprotect_fixup
+                          do_mprotect_pkey
+                          __x64_sys_mprotect
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+
+     3.40%  [k] __vma_enter_locked                     -      -
+            |
+            ---__vma_start_write
+               |
+               |--1.77%--__split_vma
+               |          vma_modify
+               |          vma_modify_flags
+               |          mprotect_fixup
+               |          do_mprotect_pkey
+               |          __x64_sys_mprotect
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |
+                --1.63%--vma_merge_existing_range
+                          vma_modify
+                          vma_modify_flags
+                          mprotect_fixup
+                          do_mprotect_pkey
+                          __x64_sys_mprotect
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+
+     3.39%  [k] do_mprotect_pkey                       -      -
+            |
+            ---__x64_sys_mprotect
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+
+     3.36%  [k] perf_event_mmap_output                 -      -
+            |
+            ---perf_iterate_ctx
+               perf_iterate_sb.constprop.0
+               perf_event_mmap_event
+               perf_event_mmap
+               mprotect_fixup
+               do_mprotect_pkey
+               __x64_sys_mprotect
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+
+     2.04%  [k] __build_id_parse.isra.0                -      -
+            |
+            ---perf_event_mmap_event
+               perf_event_mmap
+               mprotect_fixup
+               do_mprotect_pkey
+               __x64_sys_mprotect
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+
+     2.02%  [k] up_write                               -      -
+            |
+             --1.01%--vma_complete
+
+
+[Excerpt ends here; later entries omitted.]

@@ -1,0 +1,56 @@
+[
+  {
+    "mmap": 1,
+    "iteration": 0,
+    "ops": 6987362,
+    "cpu_ms": 5789.639971,
+    "sampler": "SAMPLER mmap=1 mmap_data=0 threads=4 samples=1208 lost=0 mmap_records=0",
+    "workload_exit": 0,
+    "sampler_exit": 0
+  },
+  {
+    "mmap": 0,
+    "iteration": 1,
+    "ops": 7406038,
+    "cpu_ms": 5784.46498,
+    "sampler": "SAMPLER mmap=0 mmap_data=0 threads=4 samples=1206 lost=0 mmap_records=0",
+    "workload_exit": 0,
+    "sampler_exit": 0
+  },
+  {
+    "mmap": 0,
+    "iteration": 2,
+    "ops": 7569275,
+    "cpu_ms": 5776.47272,
+    "sampler": "SAMPLER mmap=0 mmap_data=0 threads=4 samples=1204 lost=0 mmap_records=0",
+    "workload_exit": 0,
+    "sampler_exit": 0
+  },
+  {
+    "mmap": 1,
+    "iteration": 3,
+    "ops": 7018391,
+    "cpu_ms": 5788.072703,
+    "sampler": "SAMPLER mmap=1 mmap_data=0 threads=4 samples=1206 lost=0 mmap_records=0",
+    "workload_exit": 0,
+    "sampler_exit": 0
+  },
+  {
+    "mmap": 1,
+    "iteration": 4,
+    "ops": 7053337,
+    "cpu_ms": 5786.680376,
+    "sampler": "SAMPLER mmap=1 mmap_data=0 threads=4 samples=1208 lost=0 mmap_records=0",
+    "workload_exit": 0,
+    "sampler_exit": 0
+  },
+  {
+    "mmap": 0,
+    "iteration": 5,
+    "ops": 7741869,
+    "cpu_ms": 5758.370669,
+    "sampler": "SAMPLER mmap=0 mmap_data=0 threads=4 samples=1206 lost=0 mmap_records=0",
+    "workload_exit": 0,
+    "sampler_exit": 0
+  }
+]

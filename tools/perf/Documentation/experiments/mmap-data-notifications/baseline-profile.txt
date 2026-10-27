@@ -1,0 +1,29 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 816  of event 'cycles:k'
+# Event count (approx.): 15563290135
+#
+# Overhead  Symbol                                     IPC   [IPC Coverage]
+# ........  .........................................  ....................
+#
+    89.08%  [k] perf_iterate_ctx                       -      -
+            |
+            ---perf_iterate_sb.constprop.0
+               perf_event_mmap_event
+               perf_event_mmap
+               mprotect_fixup
+               do_mprotect_pkey
+               __x64_sys_mprotect
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __mprotect
+               start_thread
+
+
+
+#
+# (Tip: Order by the overhead of source file name and line number: perf report -s srcline)
+#
