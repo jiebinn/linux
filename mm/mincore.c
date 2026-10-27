@@ -292,6 +292,7 @@ SYSCALL_DEFINE3(mincore, unsigned long, start, size_t, len,
 {
 	long retval;
 	unsigned long pages;
+	unsigned char small_vec[64];
 	unsigned char *tmp;
 
 	start = untagged_addr(start);
@@ -311,7 +312,10 @@ SYSCALL_DEFINE3(mincore, unsigned long, start, size_t, len,
 	if (!access_ok(vec, pages))
 		return -EFAULT;
 
-	tmp = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if (pages <= sizeof(small_vec))
+		tmp = small_vec;
+	else
+		tmp = kmalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!tmp)
 		return -EAGAIN;
 
@@ -343,6 +347,7 @@ SYSCALL_DEFINE3(mincore, unsigned long, start, size_t, len,
 		start += retval << PAGE_SHIFT;
 		retval = 0;
 	}
-	kfree(tmp);
+	if (tmp != small_vec)
+		kfree(tmp);
 	return retval;
 }
