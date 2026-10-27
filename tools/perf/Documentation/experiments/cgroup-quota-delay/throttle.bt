@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: GPL-2.0
+// Experimental probes for Linux 6.19-rc7; not a stable tracepoint ABI.
+BEGIN { printf("READY\n"); }
+kprobe:throttle_cfs_rq {
+  $rq = (struct cfs_rq *)arg0;
+  if ($rq->rq->cpu == $1) { @thr[cpu, tid] = (uint64)arg0; }
+}
+kretprobe:throttle_cfs_rq /@thr[cpu, tid]/ {
+  $rq = (struct cfs_rq *)@thr[cpu, tid];
+  if (retval) {
+    printf("T %llu %d %llx %llu\n", nsecs(monotonic), $rq->rq->cpu,
+           @thr[cpu, tid], $rq->tg->css.cgroup->kn->id);
+  }
+  delete(@thr[cpu, tid]);
+}
+kprobe:unthrottle_cfs_rq {
+  $rq = (struct cfs_rq *)arg0;
+  if ($rq->rq->cpu == $1 && $rq->throttled) {
+    @unthr[cpu, tid] = (uint64)arg0;
+  }
+}
+kretprobe:unthrottle_cfs_rq /@unthr[cpu, tid]/ {
+  $rq = (struct cfs_rq *)@unthr[cpu, tid];
+  if (!$rq->throttled) {
+    printf("U %llu %d %llx %llu\n", nsecs(monotonic), $rq->rq->cpu,
+           @unthr[cpu, tid], $rq->tg->css.cgroup->kn->id);
+  }
+  delete(@unthr[cpu, tid]);
+}
+END { clear(@thr); clear(@unthr); }

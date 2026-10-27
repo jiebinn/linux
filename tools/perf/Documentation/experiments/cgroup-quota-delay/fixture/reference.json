@@ -1,0 +1,155 @@
+{
+  "unlimited": {
+    "pid": 100,
+    "cpu": 400,
+    "wall_ms": 2000.206667,
+    "task_cpu_ms": 1988.672173,
+    "completed_runnable_waits": 3,
+    "max_wait_ms": 0.024419,
+    "total_runnable_wait_ms": 0.051097,
+    "effective_throttle_overlap_ms": 0.0,
+    "effective_throttle_overlap_percent": 0.0,
+    "lineage": [
+      {
+        "path": "unlimited/workload",
+        "id": 1000,
+        "cpu_max": "max 100000",
+        "cpu_stat_delta": {
+          "usage_usec": 1990455,
+          "user_usec": 1988333,
+          "system_usec": 2121,
+          "nice_usec": 0,
+          "core_sched.force_idle_usec": 0,
+          "nr_periods": 0,
+          "nr_throttled": 0,
+          "throttled_usec": 0,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "observed_throttle_intervals": 0,
+        "wait_throttle_overlap_ms": 0.0
+      },
+      {
+        "path": "unlimited",
+        "id": 1001,
+        "cpu_max": "max 100000",
+        "cpu_stat_delta": {
+          "usage_usec": 1990455,
+          "user_usec": 1988333,
+          "system_usec": 2121,
+          "nice_usec": 0,
+          "core_sched.force_idle_usec": 0,
+          "nr_periods": 0,
+          "nr_throttled": 0,
+          "throttled_usec": 0,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "observed_throttle_intervals": 0,
+        "wait_throttle_overlap_ms": 0.0
+      }
+    ]
+  },
+  "parent-limited": {
+    "pid": 101,
+    "cpu": 400,
+    "wall_ms": 2055.501231,
+    "task_cpu_ms": 418.688432,
+    "completed_runnable_waits": 23,
+    "max_wait_ms": 80.811323,
+    "total_runnable_wait_ms": 1635.323598,
+    "effective_throttle_overlap_ms": 1634.913818,
+    "effective_throttle_overlap_percent": 99.97494196252649,
+    "lineage": [
+      {
+        "path": "parent-limited/workload",
+        "id": 1010,
+        "cpu_max": "max 100000",
+        "cpu_stat_delta": {
+          "usage_usec": 419982,
+          "user_usec": 419023,
+          "system_usec": 958,
+          "nice_usec": 0,
+          "core_sched.force_idle_usec": 0,
+          "nr_periods": 0,
+          "nr_throttled": 0,
+          "throttled_usec": 0,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "observed_throttle_intervals": 0,
+        "wait_throttle_overlap_ms": 0.0
+      },
+      {
+        "path": "parent-limited",
+        "id": 1011,
+        "cpu_max": "20000 100000",
+        "cpu_stat_delta": {
+          "usage_usec": 419982,
+          "user_usec": 419023,
+          "system_usec": 958,
+          "nice_usec": 0,
+          "core_sched.force_idle_usec": 0,
+          "nr_periods": 21,
+          "nr_throttled": 21,
+          "throttled_usec": 1634694,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "observed_throttle_intervals": 21,
+        "wait_throttle_overlap_ms": 1634.913818
+      }
+    ]
+  },
+  "leaf-limited": {
+    "pid": 102,
+    "cpu": 400,
+    "wall_ms": 2059.51517,
+    "task_cpu_ms": 417.521068,
+    "completed_runnable_waits": 23,
+    "max_wait_ms": 80.614892,
+    "total_runnable_wait_ms": 1640.314248,
+    "effective_throttle_overlap_ms": 1639.857244,
+    "effective_throttle_overlap_percent": 99.97213924096818,
+    "lineage": [
+      {
+        "path": "leaf-limited/workload",
+        "id": 1020,
+        "cpu_max": "20000 100000",
+        "cpu_stat_delta": {
+          "usage_usec": 418976,
+          "user_usec": 417926,
+          "system_usec": 1050,
+          "nice_usec": 0,
+          "core_sched.force_idle_usec": 0,
+          "nr_periods": 21,
+          "nr_throttled": 21,
+          "throttled_usec": 1639657,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "observed_throttle_intervals": 21,
+        "wait_throttle_overlap_ms": 1639.857244
+      },
+      {
+        "path": "leaf-limited",
+        "id": 1021,
+        "cpu_max": "max 100000",
+        "cpu_stat_delta": {
+          "usage_usec": 418976,
+          "user_usec": 417926,
+          "system_usec": 1050,
+          "nice_usec": 0,
+          "core_sched.force_idle_usec": 0,
+          "nr_periods": 0,
+          "nr_throttled": 0,
+          "throttled_usec": 0,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "observed_throttle_intervals": 0,
+        "wait_throttle_overlap_ms": 0.0
+      }
+    ]
+  }
+}
