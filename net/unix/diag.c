@@ -189,6 +189,8 @@ static int unix_diag_dump(struct sk_buff *skb, struct netlink_callback *cb)
 		struct sock *sk;
 
 		num = 0;
+		if (hlist_empty(&net->unx.table.buckets[slot]))
+			continue;
 		spin_lock(&net->unx.table.locks[slot]);
 		sk_for_each(sk, &net->unx.table.buckets[slot]) {
 			u64 sk_ino;
