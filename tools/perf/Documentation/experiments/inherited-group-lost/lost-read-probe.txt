@@ -1,0 +1,5 @@
+READY
+GROUP_ADD inherited=0 lost=461 members=2
+GROUP_ADD inherited=1 lost=0 members=2
+GROUP_ADD inherited=0 lost=461 members=2
+GROUP_ADD inherited=1 lost=0 members=2

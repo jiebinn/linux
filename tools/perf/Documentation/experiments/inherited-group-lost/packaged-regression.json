@@ -1,0 +1,83 @@
+[
+  {
+    "group": 1,
+    "samples": 53,
+    "record_lost": 449,
+    "read_lost_child_alive": 0,
+    "read_lost_child_exited": 0,
+    "inherit": 1,
+    "passed": false
+  },
+  {
+    "group": 0,
+    "samples": 53,
+    "record_lost": 447,
+    "read_lost_child_alive": 447,
+    "read_lost_child_exited": 447,
+    "inherit": 1,
+    "passed": true
+  },
+  {
+    "group": 1,
+    "samples": 54,
+    "record_lost": 449,
+    "read_lost_child_alive": 449,
+    "read_lost_child_exited": 449,
+    "inherit": 0,
+    "passed": true
+  },
+  {
+    "group": 1,
+    "samples": 54,
+    "record_lost": 449,
+    "read_lost_child_alive": 449,
+    "read_lost_child_exited": 449,
+    "inherit": 0,
+    "passed": true
+  },
+  {
+    "group": 0,
+    "samples": 54,
+    "record_lost": 449,
+    "read_lost_child_alive": 449,
+    "read_lost_child_exited": 449,
+    "inherit": 1,
+    "passed": true
+  },
+  {
+    "group": 1,
+    "samples": 54,
+    "record_lost": 449,
+    "read_lost_child_alive": 0,
+    "read_lost_child_exited": 0,
+    "inherit": 1,
+    "passed": false
+  },
+  {
+    "group": 1,
+    "samples": 54,
+    "record_lost": 449,
+    "read_lost_child_alive": 0,
+    "read_lost_child_exited": 0,
+    "inherit": 1,
+    "passed": false
+  },
+  {
+    "group": 0,
+    "samples": 54,
+    "record_lost": 449,
+    "read_lost_child_alive": 449,
+    "read_lost_child_exited": 449,
+    "inherit": 1,
+    "passed": true
+  },
+  {
+    "group": 1,
+    "samples": 54,
+    "record_lost": 452,
+    "read_lost_child_alive": 452,
+    "read_lost_child_exited": 452,
+    "inherit": 0,
+    "passed": true
+  }
+]

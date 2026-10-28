@@ -1,0 +1,6 @@
+BEGIN { printf("READY\n"); }
+kprobe:__perf_read_group_add /comm == "lost_group"/ {
+  $e = (struct perf_event *)arg0;
+  printf("GROUP_ADD inherited=%d lost=%llu members=%d\n", $e->parent != 0,
+         $e->lost_samples.counter, $e->nr_siblings + 1);
+}
