@@ -1,0 +1,9 @@
+{
+  "checked_date": "2026-10-27",
+  "master": "d135ab453a7400a34930bdda1ef4bdc8acfac80e",
+  "perf_core": "f5a78ecccd98a04c47cea1cd63c2a2fdce8a4b48",
+  "perf_tools_next": "e74880764bf94b738102b4b6b6e8304d0c8375d3",
+  "lost_group_assignment_still_present": true,
+  "lock_pid_snapshot_and_unfiltered_workload_still_present": true,
+  "unmerged_mailing_list_search": "incomplete: lore access restricted"
+}
