@@ -229,6 +229,8 @@ int lock_contention_prepare(struct lock_contention *con)
 		skel->rodata->has_task = 1;
 		ntasks = perf_thread_map__nr(evlist__core(evlist)->threads);
 	}
+	if (target__none(target) && evlist__workload_pid(evlist) > 0)
+		skel->rodata->has_task = 1;
 	if (con->filters->nr_types) {
 		skel->rodata->has_type = 1;
 		ntypes = con->filters->nr_types;

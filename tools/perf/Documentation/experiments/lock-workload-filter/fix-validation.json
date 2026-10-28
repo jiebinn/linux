@@ -1,0 +1,372 @@
+{
+  "baseline": [
+    {
+      "mode": "quiet",
+      "background_rows": [
+        [
+          "14",
+          "18.90",
+          "ms",
+          "5.01",
+          "ms",
+          "1.35",
+          "ms",
+          "1055263",
+          "op-noise"
+        ],
+        [
+          "6",
+          "12.82",
+          "ms",
+          "5.13",
+          "ms",
+          "2.14",
+          "ms",
+          "1055261",
+          "op-noise"
+        ],
+        [
+          "6",
+          "6.18",
+          "ms",
+          "5.00",
+          "ms",
+          "1.03",
+          "ms",
+          "1055260",
+          "op-noise"
+        ],
+        [
+          "2",
+          "1.83",
+          "ms",
+          "1.83",
+          "ms",
+          "916.81",
+          "us",
+          "1055262",
+          "op-noise"
+        ]
+      ],
+      "target_pid": null,
+      "target_main_rows": [],
+      "stdout": "",
+      "stderr": " contended   total wait     max wait     avg wait          pid   comm\n\n        14     18.90 ms      5.01 ms      1.35 ms      1055263   op-noise\n         6     12.82 ms      5.13 ms      2.14 ms      1055261   op-noise\n         6      6.18 ms      5.00 ms      1.03 ms      1055260   op-noise\n         2      1.83 ms      1.83 ms    916.81 us      1055262   op-noise\n         2    301.44 us    297.80 us    150.72 us      1055199   codex-code-mode\n         1     19.31 us     19.31 us     19.31 us      1055303   git\n",
+      "background": "READY 1055259 1055260,1055261,1055262,1055263\nRESULT threads=4 bytes=4194304 duration=2.000\nTHREAD cpu=400 tid=1055260 ops=171629 syscall_ns=1959932434 cpu_ns=1711068894 error=0\nTHREAD cpu=401 tid=1055261 ops=171531 syscall_ns=1960347725 cpu_ns=1699826850 error=0\nTHREAD cpu=402 tid=1055262 ops=172283 syscall_ns=1963437549 cpu_ns=1740999714 error=0\nTHREAD cpu=403 tid=1055263 ops=170417 syscall_ns=1962881587 cpu_ns=1737649357 error=0\n"
+    },
+    {
+      "mode": "target",
+      "background_rows": [
+        [
+          "1317",
+          "834.98",
+          "ms",
+          "9.95",
+          "ms",
+          "634.00",
+          "us",
+          "1055345",
+          "op-noise"
+        ],
+        [
+          "488",
+          "834.54",
+          "ms",
+          "9.00",
+          "ms",
+          "1.71",
+          "ms",
+          "1055343",
+          "op-noise"
+        ],
+        [
+          "1108",
+          "826.66",
+          "ms",
+          "10.02",
+          "ms",
+          "746.08",
+          "us",
+          "1055346",
+          "op-noise"
+        ],
+        [
+          "532",
+          "716.96",
+          "ms",
+          "9.72",
+          "ms",
+          "1.35",
+          "ms",
+          "1055344",
+          "op-noise"
+        ]
+      ],
+      "target_pid": 1055352,
+      "target_main_rows": [
+        [
+          "494",
+          "875.38",
+          "ms",
+          "8.94",
+          "ms",
+          "1.77",
+          "ms",
+          "1055352",
+          "scope-target"
+        ]
+      ],
+      "stdout": "READY 1055352 1055353,1055354,1055355,1055352\nRESULT threads=4 bytes=4194304 duration=3.000\nTHREAD cpu=400 tid=1055353 ops=380631 syscall_ns=2980786892 cpu_ns=1672319758 error=0\nTHREAD cpu=401 tid=1055354 ops=396308 syscall_ns=2982391940 cpu_ns=1691350486 error=0\nTHREAD cpu=402 tid=1055355 ops=351725 syscall_ns=2948458503 cpu_ns=1651808210 error=0\nTHREAD cpu=403 tid=1055352 ops=384070 syscall_ns=2936334092 cpu_ns=1675326351 error=0\n",
+      "stderr": " contended   total wait     max wait     avg wait          pid   comm\n\n       549    924.25 ms      8.94 ms      1.68 ms      1055355   scope-target\n       494    875.38 ms      8.94 ms      1.77 ms      1055352   scope-target\n       714    850.40 ms      8.95 ms      1.19 ms      1055353   scope-target\n      1317    834.98 ms      9.95 ms    634.00 us      1055345   op-noise\n       488    834.54 ms      9.00 ms      1.71 ms      1055343   op-noise\n      1108    826.66 ms     10.02 ms    746.08 us      1055346   op-noise\n       638    779.34 ms      8.01 ms      1.22 ms      1055354   scope-target\n       532    716.96 ms      9.72 ms      1.35 ms      1055344   op-noise\n         1      1.15 ms      1.15 ms      1.15 ms      1055488   git\n         1      1.01 ms      1.01 ms      1.01 ms      1055489   git\n         3    336.27 us    203.32 us    112.09 us      1055392   git\n         1    316.93 us    316.93 us    316.93 us      1055411   git\n         1    241.73 us    241.73 us    241.73 us      1055570   git\n         1    222.06 us    222.06 us    222.06 us      1055452   git\n         1    220.44 us    220.44 us    220.44 us      1055410   git\n         1    192.50 us    192.50 us    192.50 us      1055402   git\n         4    105.90 us     42.74 us     26.48 us      1055446   git\n         3     70.58 us     39.55 us     23.52 us      1055553   git\n         1     65.36 us     65.36 us     65.36 us      1055438   git\n         1     40.46 us     40.46 us     40.46 us      1055487   git\n         1     36.92 us     36.92 us     36.92 us      1055481   git\n         1     34.47 us     34.47 us     34.47 us      1055439   git\n         1     21.98 us     21.98 us     21.98 us      1055563   git\n         1      3.17 us      3.17 us      3.17 us      1055462   git\n         1      2.86 us      2.86 us      2.86 us      1055486   git\n         1      2.64 us      2.64 us      2.64 us      1055483   git\n",
+      "background": "READY 1055342 1055343,1055344,1055345,1055346\nRESULT threads=4 bytes=4194304 duration=2.000\nTHREAD cpu=400 tid=1055343 ops=318974 syscall_ns=1981290361 cpu_ns=738364102 error=0\nTHREAD cpu=401 tid=1055344 ops=342956 syscall_ns=1971856340 cpu_ns=777459591 error=0\nTHREAD cpu=402 tid=1055345 ops=338205 syscall_ns=1972366388 cpu_ns=780646936 error=0\nTHREAD cpu=403 tid=1055346 ops=316864 syscall_ns=1979128203 cpu_ns=762798820 error=0\n"
+    },
+    {
+      "mode": "system",
+      "background_rows": [
+        [
+          "13",
+          "25.06",
+          "ms",
+          "5.00",
+          "ms",
+          "1.93",
+          "ms",
+          "1055629",
+          "op-noise"
+        ],
+        [
+          "5",
+          "11.12",
+          "ms",
+          "5.13",
+          "ms",
+          "2.22",
+          "ms",
+          "1055631",
+          "op-noise"
+        ],
+        [
+          "6",
+          "6.74",
+          "ms",
+          "3.34",
+          "ms",
+          "1.12",
+          "ms",
+          "1055628",
+          "op-noise"
+        ],
+        [
+          "4",
+          "5.84",
+          "ms",
+          "5.00",
+          "ms",
+          "1.46",
+          "ms",
+          "1055630",
+          "op-noise"
+        ]
+      ],
+      "target_pid": null,
+      "target_main_rows": [],
+      "stdout": "",
+      "stderr": " contended   total wait     max wait     avg wait          pid   comm\n\n        13     25.06 ms      5.00 ms      1.93 ms      1055629   op-noise\n         5     11.12 ms      5.13 ms      2.22 ms      1055631   op-noise\n         6      6.74 ms      3.34 ms      1.12 ms      1055628   op-noise\n         4      5.84 ms      5.00 ms      1.46 ms      1055630   op-noise\n         1     19.06 us     19.06 us     19.06 us      1055357   codex-code-mode\n",
+      "background": "READY 1055626 1055628,1055629,1055630,1055631\nRESULT threads=4 bytes=4194304 duration=2.000\nTHREAD cpu=400 tid=1055628 ops=178621 syscall_ns=1994282133 cpu_ns=1706686182 error=0\nTHREAD cpu=401 tid=1055629 ops=177989 syscall_ns=1962441737 cpu_ns=1689302462 error=0\nTHREAD cpu=402 tid=1055630 ops=181009 syscall_ns=1962126990 cpu_ns=1746965112 error=0\nTHREAD cpu=403 tid=1055631 ops=178019 syscall_ns=1994266512 cpu_ns=1754082794 error=0\n"
+    },
+    {
+      "mode": "pid",
+      "background_rows": [
+        [
+          "7",
+          "14.35",
+          "ms",
+          "5.00",
+          "ms",
+          "2.05",
+          "ms",
+          "1055773",
+          "op-noise"
+        ],
+        [
+          "2",
+          "5.18",
+          "ms",
+          "4.99",
+          "ms",
+          "2.59",
+          "ms",
+          "1055775",
+          "op-noise"
+        ],
+        [
+          "3",
+          "4.65",
+          "ms",
+          "3.58",
+          "ms",
+          "1.55",
+          "ms",
+          "1055774",
+          "op-noise"
+        ],
+        [
+          "2",
+          "3.39",
+          "ms",
+          "3.39",
+          "ms",
+          "1.69",
+          "ms",
+          "1055776",
+          "op-noise"
+        ]
+      ],
+      "target_pid": null,
+      "target_main_rows": [],
+      "stdout": "",
+      "stderr": " contended   total wait     max wait     avg wait          pid   comm\n\n         7     14.35 ms      5.00 ms      2.05 ms      1055773   op-noise\n         2      5.18 ms      4.99 ms      2.59 ms      1055775   op-noise\n         3      4.65 ms      3.58 ms      1.55 ms      1055774   op-noise\n         2      3.39 ms      3.39 ms      1.69 ms      1055776   op-noise\n",
+      "background": "READY 1055771 1055773,1055774,1055775,1055776\nRESULT threads=4 bytes=4194304 duration=2.000\nTHREAD cpu=400 tid=1055773 ops=149291 syscall_ns=1951049591 cpu_ns=1729660121 error=0\nTHREAD cpu=401 tid=1055774 ops=161232 syscall_ns=1944070030 cpu_ns=1761957583 error=0\nTHREAD cpu=402 tid=1055775 ops=153289 syscall_ns=1948214870 cpu_ns=1777255341 error=0\nTHREAD cpu=403 tid=1055776 ops=142409 syscall_ns=1995201105 cpu_ns=1797276736 error=0\n"
+    }
+  ],
+  "candidate": [
+    {
+      "mode": "quiet",
+      "background_rows": [],
+      "target_pid": null,
+      "target_main_rows": [],
+      "stdout": "",
+      "stderr": " contended   total wait     max wait     avg wait          pid   comm\n\n",
+      "background": "READY 1056225 1056227,1056228,1056229,1056230\nRESULT threads=4 bytes=4194304 duration=2.000\nTHREAD cpu=400 tid=1056227 ops=172311 syscall_ns=1994855997 cpu_ns=1694105712 error=0\nTHREAD cpu=401 tid=1056228 ops=183225 syscall_ns=1955973345 cpu_ns=1709156587 error=0\nTHREAD cpu=402 tid=1056229 ops=182152 syscall_ns=1955263493 cpu_ns=1750537977 error=0\nTHREAD cpu=403 tid=1056230 ops=173002 syscall_ns=1994381463 cpu_ns=1749996042 error=0\n"
+    },
+    {
+      "mode": "target",
+      "background_rows": [],
+      "target_pid": 1056283,
+      "target_main_rows": [
+        [
+          "435",
+          "727.41",
+          "ms",
+          "7.02",
+          "ms",
+          "1.67",
+          "ms",
+          "1056283",
+          "scope-target"
+        ]
+      ],
+      "stdout": "READY 1056283 1056289,1056290,1056291,1056283\nRESULT threads=4 bytes=4194304 duration=3.000\nTHREAD cpu=400 tid=1056289 ops=352638 syscall_ns=2986536763 cpu_ns=1803510205 error=0\nTHREAD cpu=401 tid=1056290 ops=349475 syscall_ns=2946329440 cpu_ns=1759348587 error=0\nTHREAD cpu=402 tid=1056291 ops=389536 syscall_ns=2946804431 cpu_ns=1874900280 error=0\nTHREAD cpu=403 tid=1056283 ops=377227 syscall_ns=2987671502 cpu_ns=1899795934 error=0\n",
+      "stderr": " contended   total wait     max wait     avg wait          pid   comm\n\n       435    727.41 ms      7.02 ms      1.67 ms      1056283   scope-target\n",
+      "background": "READY 1056274 1056275,1056276,1056277,1056278\nRESULT threads=4 bytes=4194304 duration=2.000\nTHREAD cpu=400 tid=1056275 ops=365783 syscall_ns=1958403651 cpu_ns=658722724 error=0\nTHREAD cpu=401 tid=1056276 ops=338848 syscall_ns=1975695280 cpu_ns=642330548 error=0\nTHREAD cpu=402 tid=1056277 ops=351548 syscall_ns=1977992677 cpu_ns=621557110 error=0\nTHREAD cpu=403 tid=1056278 ops=327532 syscall_ns=1981960672 cpu_ns=630619711 error=0\n"
+    },
+    {
+      "mode": "system",
+      "background_rows": [
+        [
+          "15",
+          "17.51",
+          "ms",
+          "4.93",
+          "ms",
+          "1.17",
+          "ms",
+          "1056375",
+          "op-noise"
+        ],
+        [
+          "4",
+          "6.24",
+          "ms",
+          "2.91",
+          "ms",
+          "1.56",
+          "ms",
+          "1056378",
+          "op-noise"
+        ],
+        [
+          "4",
+          "5.46",
+          "ms",
+          "2.82",
+          "ms",
+          "1.37",
+          "ms",
+          "1056377",
+          "op-noise"
+        ],
+        [
+          "4",
+          "966.24",
+          "us",
+          "599.33",
+          "us",
+          "241.56",
+          "us",
+          "1056376",
+          "op-noise"
+        ]
+      ],
+      "target_pid": null,
+      "target_main_rows": [],
+      "stdout": "",
+      "stderr": " contended   total wait     max wait     avg wait          pid   comm\n\n        15     17.51 ms      4.93 ms      1.17 ms      1056375   op-noise\n         4      6.24 ms      2.91 ms      1.56 ms      1056378   op-noise\n         4      5.46 ms      2.82 ms      1.37 ms      1056377   op-noise\n         4      4.97 ms      3.23 ms      1.24 ms      1056361   ld.lld-21\n         3      3.94 ms      1.90 ms      1.31 ms      1056356   ld.lld-21\n         3      3.18 ms      2.35 ms      1.06 ms      1056366   ld.lld-21\n         3      3.12 ms      2.15 ms      1.04 ms      1056363   ld.lld-21\n         4      2.68 ms      1.98 ms    671.01 us      1056369   ld.lld-21\n         4      2.50 ms      1.58 ms    625.09 us      1056367   ld.lld-21\n         2      2.39 ms      1.74 ms      1.19 ms      1056360   ld.lld-21\n         2      1.99 ms      1.72 ms    996.21 us      1056364   ld.lld-21\n         3      1.87 ms      1.44 ms    622.67 us      1056358   ld.lld-21\n         2      1.66 ms    961.09 us    829.00 us      1056359   ld.lld-21\n         3      1.45 ms    776.48 us    483.73 us      1056368   ld.lld-21\n         4      1.35 ms    471.23 us    336.75 us      1056357   ld.lld-21\n         2      1.23 ms      1.18 ms    616.86 us      1056365   ld.lld-21\n         4    966.24 us    599.33 us    241.56 us      1056376   op-noise\n         2    724.52 us    430.08 us    362.26 us      1056362   ld.lld-21\n         1    263.09 us    263.09 us    263.09 us      1056355   ld.lld-21\n         1     23.92 us     23.92 us     23.92 us      1056370   ld.lld-21\n",
+      "background": "READY 1056373 1056375,1056376,1056377,1056378\nRESULT threads=4 bytes=4194304 duration=2.000\nTHREAD cpu=400 tid=1056375 ops=193267 syscall_ns=1993927253 cpu_ns=1692811823 error=0\nTHREAD cpu=401 tid=1056376 ops=205738 syscall_ns=1958016499 cpu_ns=1715021718 error=0\nTHREAD cpu=402 tid=1056377 ops=203011 syscall_ns=1958117055 cpu_ns=1743048585 error=0\nTHREAD cpu=403 tid=1056378 ops=194397 syscall_ns=1993837673 cpu_ns=1754946045 error=0\n"
+    },
+    {
+      "mode": "pid",
+      "background_rows": [
+        [
+          "7",
+          "2.90",
+          "ms",
+          "998.93",
+          "us",
+          "414.78",
+          "us",
+          "1056392",
+          "op-noise"
+        ],
+        [
+          "4",
+          "2.39",
+          "ms",
+          "1.79",
+          "ms",
+          "596.63",
+          "us",
+          "1056393",
+          "op-noise"
+        ],
+        [
+          "6",
+          "937.45",
+          "us",
+          "384.56",
+          "us",
+          "156.24",
+          "us",
+          "1056391",
+          "op-noise"
+        ],
+        [
+          "3",
+          "674.60",
+          "us",
+          "442.29",
+          "us",
+          "224.87",
+          "us",
+          "1056394",
+          "op-noise"
+        ]
+      ],
+      "target_pid": null,
+      "target_main_rows": [],
+      "stdout": "",
+      "stderr": " contended   total wait     max wait     avg wait          pid   comm\n\n         7      2.90 ms    998.93 us    414.78 us      1056392   op-noise\n         4      2.39 ms      1.79 ms    596.63 us      1056393   op-noise\n         6    937.45 us    384.56 us    156.24 us      1056391   op-noise\n         3    674.60 us    442.29 us    224.87 us      1056394   op-noise\n",
+      "background": "READY 1056389 1056391,1056392,1056393,1056394\nRESULT threads=4 bytes=4194304 duration=2.000\nTHREAD cpu=400 tid=1056391 ops=212557 syscall_ns=1993212060 cpu_ns=1661539631 error=0\nTHREAD cpu=401 tid=1056392 ops=212204 syscall_ns=1992387456 cpu_ns=1676646479 error=0\nTHREAD cpu=402 tid=1056393 ops=213638 syscall_ns=1964752816 cpu_ns=1713302747 error=0\nTHREAD cpu=403 tid=1056394 ops=215106 syscall_ns=1964635825 cpu_ns=1737615489 error=0\n"
+    }
+  ]
+}
