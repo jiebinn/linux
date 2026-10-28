@@ -1,0 +1,58 @@
+[
+  {
+    "mode": "pid",
+    "pid": 4020856,
+    "perf_exit": 0,
+    "worker_rows": []
+  },
+  {
+    "mode": "all",
+    "pid": 4020946,
+    "perf_exit": 0,
+    "worker_rows": [
+      "        16     13.04 ms      4.99 ms    815.05 us      4020953   op-target",
+      "         2      2.70 ms      2.67 ms      1.35 ms      4020954   op-target",
+      "         2      2.61 ms      2.59 ms      1.30 ms      4020956   op-target",
+      "         2    344.81 us    234.21 us    172.40 us      4020955   op-target"
+    ]
+  },
+  {
+    "mode": "all",
+    "pid": 4020962,
+    "perf_exit": 0,
+    "worker_rows": [
+      "        16     35.01 ms      5.00 ms      2.19 ms      4020972   op-target",
+      "         4      6.15 ms      4.99 ms      1.54 ms      4020974   op-target",
+      "         3      1.40 ms    573.08 us    465.53 us      4020971   op-target",
+      "         3    823.61 us    394.70 us    274.54 us      4020973   op-target"
+    ]
+  },
+  {
+    "mode": "pid",
+    "pid": 4021014,
+    "perf_exit": 0,
+    "worker_rows": []
+  },
+  {
+    "mode": "existing",
+    "pid": 4021035,
+    "perf_exit": 0,
+    "worker_rows": [
+      "        11     23.10 ms      5.00 ms      2.10 ms      4021039   op-noise",
+      "         8      8.58 ms      5.00 ms      1.07 ms      4021037   op-noise",
+      "         3      1.00 ms    991.85 us    334.13 us      4021038   op-noise",
+      "         1    133.67 us    133.67 us    133.67 us      4021040   op-noise"
+    ]
+  },
+  {
+    "mode": "command",
+    "pid": 4021294,
+    "perf_exit": 0,
+    "worker_rows": [
+      "        13     14.02 ms      4.36 ms      1.08 ms      4021297   op-noise",
+      "         6      7.24 ms      5.00 ms      1.21 ms      4021296   op-noise",
+      "         6      2.79 ms      1.26 ms    464.46 us      4021299   op-noise",
+      "         6      1.14 ms    305.35 us    190.68 us      4021298   op-noise"
+    ]
+  }
+]

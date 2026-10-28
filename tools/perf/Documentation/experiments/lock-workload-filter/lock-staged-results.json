@@ -1,0 +1,35 @@
+[
+  {
+    "mode": "pid",
+    "pid": 3955874,
+    "perf_exit": 0,
+    "worker_rows": []
+  },
+  {
+    "mode": "all",
+    "pid": 3955890,
+    "perf_exit": 0,
+    "worker_rows": [
+      "         8     14.63 ms      5.00 ms      1.83 ms      3955937   op-target",
+      "         2      4.98 ms      4.97 ms      2.49 ms      3955939   op-target",
+      "         1    295.58 us    295.58 us    295.58 us      3955938   op-target",
+      "         1     26.81 us     26.81 us     26.81 us      3955936   op-target"
+    ]
+  },
+  {
+    "mode": "all",
+    "pid": 3955950,
+    "perf_exit": 0,
+    "worker_rows": [
+      "         4      8.66 ms      3.92 ms      2.16 ms      3955960   op-target",
+      "         1    980.18 us    980.18 us    980.18 us      3955961   op-target",
+      "         2     41.44 us     35.05 us     20.72 us      3955963   op-target"
+    ]
+  },
+  {
+    "mode": "pid",
+    "pid": 3955983,
+    "perf_exit": 0,
+    "worker_rows": []
+  }
+]
