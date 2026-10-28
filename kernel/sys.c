@@ -1015,10 +1015,12 @@ SYSCALL_DEFINE0(gettid)
  */
 SYSCALL_DEFINE0(getppid)
 {
+	struct task_struct *parent;
 	int pid;
 
 	rcu_read_lock();
-	pid = task_tgid_vnr(rcu_dereference(current->real_parent));
+	parent = rcu_dereference(current->real_parent);
+	pid = pid_vnr(READ_ONCE(parent->signal->pids[PIDTYPE_TGID]));
 	rcu_read_unlock();
 
 	return pid;
