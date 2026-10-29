@@ -883,18 +883,13 @@ static inline __poll_t do_pollfd(struct pollfd *pollfd, poll_table *pwait,
 static int do_poll(struct poll_list *list, struct poll_wqueues *wait,
 		   struct timespec64 *end_time)
 {
-	poll_table* pt = &wait->pt;
+	poll_table nowait = { ._qproc = NULL, ._key = ~(__poll_t)0 };
+	poll_table *pt = wait ? &wait->pt : &nowait;
 	ktime_t expire, *to = NULL;
-	int timed_out = 0, count = 0;
+	int timed_out = !wait, count = 0;
 	u64 slack = 0;
 	__poll_t busy_flag = net_busy_loop_on() ? POLL_BUSY_LOOP : 0;
 	unsigned long busy_start = 0;
-
-	/* Optimise the no-wait case */
-	if (end_time && !end_time->tv_sec && !end_time->tv_nsec) {
-		pt->_qproc = NULL;
-		timed_out = 1;
-	}
 
 	if (end_time && !timed_out)
 		slack = select_estimate_accuracy(end_time);
@@ -934,7 +929,7 @@ static int do_poll(struct poll_list *list, struct poll_wqueues *wait,
 		 */
 		pt->_qproc = NULL;
 		if (!count) {
-			count = wait->error;
+			count = wait ? wait->error : 0;
 			if (signal_pending(current))
 				count = -ERESTARTNOHAND;
 		}
@@ -968,13 +963,25 @@ static int do_poll(struct poll_list *list, struct poll_wqueues *wait,
 	return count;
 }
 
+/* Keep the waitqueue storage off the no-wait path's stack. */
+static noinline int do_poll_wait(struct poll_list *list,
+				 struct timespec64 *end_time)
+{
+	struct poll_wqueues table;
+	int count;
+
+	poll_initwait(&table);
+	count = do_poll(list, &table, end_time);
+	poll_freewait(&table);
+	return count;
+}
+
 #define N_STACK_PPS ((sizeof(stack_pps) - sizeof(struct poll_list))  / \
 			sizeof(struct pollfd))
 
 static int do_sys_poll(struct pollfd __user *ufds, unsigned int nfds,
 		struct timespec64 *end_time)
 {
-	struct poll_wqueues table;
 	int err = -EFAULT, fdcount;
 	/* Allocate small arguments on the stack to save memory and be
 	   faster - use long to make sure the buffer is aligned properly
@@ -1011,9 +1018,10 @@ static int do_sys_poll(struct pollfd __user *ufds, unsigned int nfds,
 		}
 	}
 
-	poll_initwait(&table);
-	fdcount = do_poll(head, &table, end_time);
-	poll_freewait(&table);
+	if (end_time && !end_time->tv_sec && !end_time->tv_nsec)
+		fdcount = do_poll(head, NULL, end_time);
+	else
+		fdcount = do_poll_wait(head, end_time);
 
 	scoped_user_write_access_size(ufds, nfds * sizeof(*ufds), out_fds) {
 		struct pollfd __user *_ufds = ufds;
