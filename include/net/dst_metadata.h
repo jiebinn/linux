@@ -31,8 +31,19 @@ struct xfrm_md_info {
 };
 
 struct metadata_dst {
+#ifdef CONFIG_64BIT
+	union {
+		struct dst_entry dst;
+		struct {
+			/* Reuse the trailing dst padding for the metadata type. */
+			u8 __pad[offsetofend(struct dst_entry, tclassid)];
+			enum metadata_type type;
+		};
+	};
+#else
 	struct dst_entry		dst;
 	enum metadata_type		type;
+#endif
 	union {
 		struct ip_tunnel_info	tun_info;
 		struct hw_port_info	port_info;
