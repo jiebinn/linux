@@ -76,8 +76,8 @@ struct dst_entry {
 	struct rcu_head		rcu_head;
 	short			error;
 	short			__pad;
-	__u32			tclassid;
 #ifndef CONFIG_64BIT
+	__u32			tclassid;
 	struct lwtunnel_state   *lwtstate;
 	rcuref_t		__rcuref;	/* 32-bit offset 64 */
 #endif
@@ -94,6 +94,7 @@ struct dst_entry {
 	struct uncached_list	*rt_uncached_list;
 #ifdef CONFIG_64BIT
 	struct lwtunnel_state   *lwtstate;
+	__u32			tclassid;
 #endif
 };
 
