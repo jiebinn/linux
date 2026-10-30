@@ -1919,10 +1919,15 @@ retry:
 	stime += tgstime;
 
 out_thread:
-	mm = get_task_mm(p);
-	if (mm) {
-		setmax_mm_hiwater_rss(&maxrss, mm);
-		mmput(mm);
+	if (p == current && !(p->flags & PF_KTHREAD)) {
+		if (p->mm)
+			setmax_mm_hiwater_rss(&maxrss, p->mm);
+	} else {
+		mm = get_task_mm(p);
+		if (mm) {
+			setmax_mm_hiwater_rss(&maxrss, mm);
+			mmput(mm);
+		}
 	}
 
 out_children:
