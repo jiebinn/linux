@@ -3776,7 +3776,8 @@ static ssize_t shmem_file_splice_read(struct file *in, loff_t *ppos,
 			 * now splice it into the pipe.
 			 */
 			n = splice_folio_into_pipe(pipe, folio, *ppos, part);
-			folio_put(folio);
+			if (!n)
+				folio_put(folio);
 			folio = NULL;
 		} else {
 			n = splice_zeropage_into_pipe(pipe, *ppos, part);
