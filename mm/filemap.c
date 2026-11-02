@@ -3037,11 +3037,13 @@ EXPORT_SYMBOL(generic_file_read_iter);
 
 /*
  * Splice subpages from a folio into a pipe.
+ * A successful splice transfers the caller's folio reference to the pipe.
  */
 size_t splice_folio_into_pipe(struct pipe_inode_info *pipe,
 			      struct folio *folio, loff_t fpos, size_t size)
 {
 	struct page *page;
+	pipe_index_t head = pipe->head, nr;
 	size_t spliced = 0, offset = offset_in_folio(folio, fpos);
 
 	page = folio_page(folio, offset / PAGE_SIZE);
@@ -3058,12 +3060,16 @@ size_t splice_folio_into_pipe(struct pipe_inode_info *pipe,
 			.offset	= offset,
 			.len	= part,
 		};
-		folio_get(folio);
 		pipe->head++;
 		page++;
 		spliced += part;
 		offset = 0;
 	}
+
+	/* The pipe is locked or private; reuse the caller's first reference. */
+	nr = pipe->head - head;
+	if (nr > 1)
+		folio_ref_add(folio, nr - 1);
 
 	return spliced;
 }
@@ -3161,6 +3167,7 @@ ssize_t filemap_splice_read(struct file *in, loff_t *ppos,
 			n = splice_folio_into_pipe(pipe, folio, *ppos, n);
 			if (!n)
 				goto out;
+			fbatch.folios[i] = NULL;
 			len -= n;
 			total_spliced += n;
 			*ppos += n;
