@@ -20,7 +20,11 @@
 #ifdef CONFIG_SMP
 
 struct percpu_counter {
+#ifdef CONFIG_PREEMPT_RT
 	raw_spinlock_t lock;
+#else
+	rwlock_t lock;		/* shared for sums, exclusive for updates */
+#endif
 	s64 count;
 #ifdef CONFIG_HOTPLUG_CPU
 	struct list_head list;	/* All percpu_counters are on a list */
